@@ -4456,7 +4456,8 @@ Status Td::set_parameters(td_api::object_ptr<td_api::tdlibParameters> parameters
 
   if (!clean_input_string(parameters->api_hash_) && !clean_input_string(parameters->system_language_code_) &&
       !clean_input_string(parameters->device_model_) && !clean_input_string(parameters->system_version_) &&
-      !clean_input_string(parameters->application_version_)) {
+      !clean_input_string(parameters->application_version_) && !clean_input_string(parameters->language_pack_) &&
+      !clean_input_string(parameters->language_code_)) {
     VLOG(td_init) << "Wrong string encoding";
     return Status::Error(400, "Strings must be encoded in UTF-8");
   }
