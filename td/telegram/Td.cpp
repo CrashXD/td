@@ -4482,6 +4482,8 @@ Status Td::set_parameters(td_api::object_ptr<td_api::tdlibParameters> parameters
   VLOG(td_init) << "Create MtprotoHeader::Options";
   options_.api_id = parameters->api_id_;
   options_.system_language_code = trim(parameters->system_language_code_);
+  options_.language_pack = trim(parameters->language_pack_);
+  options_.language_code = trim(parameters-language_code_);
   options_.device_model = trim(parameters->device_model_);
   options_.system_version = trim(parameters->system_version_);
   options_.application_version = trim(parameters->application_version_);
@@ -4502,8 +4504,8 @@ Status Td::set_parameters(td_api::object_ptr<td_api::tdlibParameters> parameters
     options_.application_version += ", TDLib ";
     options_.application_version += TDLIB_VERSION;
   }
-  options_.language_pack = "";
-  options_.language_code = "";
+  //options_.language_pack = "";
+  //options_.language_code = "";
   options_.parameters = "";
   options_.is_emulator = false;
   options_.proxy = Proxy();
