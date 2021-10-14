@@ -4456,8 +4456,7 @@ Status Td::set_parameters(td_api::object_ptr<td_api::tdlibParameters> parameters
 
   if (!clean_input_string(parameters->api_hash_) && !clean_input_string(parameters->system_language_code_) &&
       !clean_input_string(parameters->device_model_) && !clean_input_string(parameters->system_version_) &&
-      !clean_input_string(parameters->application_version_) && !clean_input_string(parameters->language_pack_) &&
-      !clean_input_string(parameters->language_code_)) {
+      !clean_input_string(parameters->application_version_)) {
     VLOG(td_init) << "Wrong string encoding";
     return Status::Error(400, "Strings must be encoded in UTF-8");
   }
@@ -4483,8 +4482,6 @@ Status Td::set_parameters(td_api::object_ptr<td_api::tdlibParameters> parameters
   VLOG(td_init) << "Create MtprotoHeader::Options";
   options_.api_id = parameters->api_id_;
   options_.system_language_code = trim(parameters->system_language_code_);
-  options_.language_pack = trim(parameters->language_pack_);
-  options_.language_code = trim(parameters-language_code_);
   options_.device_model = trim(parameters->device_model_);
   options_.system_version = trim(parameters->system_version_);
   options_.application_version = trim(parameters->application_version_);
@@ -4501,12 +4498,20 @@ Status Td::set_parameters(td_api::object_ptr<td_api::tdlibParameters> parameters
   if (options_.application_version.empty()) {
     return Status::Error(400, "Application version must be non-empty");
   }
-  if (options_.api_id != 21724) {
+  /*if (options_.api_id != 21724) {
     options_.application_version += ", TDLib ";
     options_.application_version += TDLIB_VERSION;
+  }*/
+  options_.language_pack = "";
+  options_.language_code = "";
+  if (options_.api_id == 8) {
+    options_.language_pack = "ios";
+    options_.language_code = "en";
   }
-  //options_.language_pack = "";
-  //options_.language_code = "";
+  if (options_.api_id == 6) {
+    options_.language_pack = "android";
+    options_.language_code = "en";
+  }
   options_.parameters = "";
   options_.is_emulator = false;
   options_.proxy = Proxy();
