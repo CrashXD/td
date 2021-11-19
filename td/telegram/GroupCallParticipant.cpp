@@ -7,7 +7,7 @@
 #include "td/telegram/GroupCallParticipant.h"
 
 #include "td/telegram/Global.h"
-#include "td/telegram/MessagesManager.h"
+#include "td/telegram/MessageSender.h"
 #include "td/telegram/Td.h"
 
 #include "td/utils/logging.h"
@@ -20,7 +20,7 @@ GroupCallParticipant::GroupCallParticipant(const tl_object_ptr<telegram_api::gro
                                            int32 call_version) {
   CHECK(participant != nullptr);
   dialog_id = DialogId(participant->peer_);
-  about = std::move(participant->about_);
+  about = participant->about_;
   audio_source = participant->source_;
   server_is_muted_by_themselves = participant->can_self_unmute_;
   server_is_muted_by_admin = participant->muted_ && !participant->can_self_unmute_;
@@ -32,7 +32,7 @@ GroupCallParticipant::GroupCallParticipant(const tl_object_ptr<telegram_api::gro
       LOG(ERROR) << "Receive " << to_string(participant);
       volume_level = 10000;
     }
-    is_volume_level_local = (participant->flags_ & telegram_api::groupCallParticipant::VOLUME_BY_ADMIN_MASK) == 0;
+    is_volume_level_local = !participant->volume_by_admin_;
   }
   if (!participant->left_) {
     joined_date = participant->date_;
@@ -266,7 +266,7 @@ td_api::object_ptr<td_api::groupCallParticipant> GroupCallParticipant::get_group
   }
 
   return td_api::make_object<td_api::groupCallParticipant>(
-      td->messages_manager_->get_message_sender_object(dialog_id, "get_group_call_participant_object"), audio_source,
+      get_message_sender_object(td, dialog_id, "get_group_call_participant_object"), audio_source,
       presentation_audio_source, video_payload.get_group_call_participant_video_info_object(),
       presentation_payload.get_group_call_participant_video_info_object(), about, is_self, is_speaking,
       get_is_hand_raised(), can_be_muted_for_all_users, can_be_unmuted_for_all_users, can_be_muted_only_for_self,
