@@ -6,7 +6,7 @@ if (POLICY CMP0065)
   cmake_policy(SET CMP0065 NEW)
 endif()
 
-project(TDLib VERSION 1.7.9 LANGUAGES CXX C)
+project(TDLib VERSION 1.7.10 LANGUAGES CXX C)
 
 if (NOT DEFINED CMAKE_MODULE_PATH)
   set(CMAKE_MODULE_PATH "")
@@ -301,6 +301,7 @@ set(TDLIB_SOURCE
   td/telegram/DeviceTokenManager.cpp
   td/telegram/DhCache.cpp
   td/telegram/DialogAction.cpp
+  td/telegram/DialogActionBar.cpp
   td/telegram/DialogAdministrator.cpp
   td/telegram/DialogDb.cpp
   td/telegram/DialogEventLog.cpp
@@ -485,6 +486,7 @@ set(TDLIB_SOURCE
   td/telegram/DhCache.h
   td/telegram/DhConfig.h
   td/telegram/DialogAction.h
+  td/telegram/DialogActionBar.h
   td/telegram/DialogAdministrator.h
   td/telegram/DialogDate.h
   td/telegram/DialogDb.h

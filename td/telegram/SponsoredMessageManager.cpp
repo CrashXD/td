@@ -168,13 +168,14 @@ td_api::object_ptr<td_api::sponsoredMessage> SponsoredMessageManager::get_sponso
       link = td_api::make_object<td_api::internalLinkTypeBotStart>(bot_username, sponsored_message.start_param);
       break;
     }
-    case DialogType::Channel: {
-      auto channel_id = sponsored_message.sponsor_dialog_id.get_channel_id();
-      auto t_me = G()->shared_config().get_option_string("t_me_url", "https://t.me/");
-      link = td_api::make_object<td_api::internalLinkTypeMessage>(
-          PSTRING() << t_me << "/c" << channel_id.get() << '/' << sponsored_message.server_message_id.get());
+    case DialogType::Channel:
+      if (sponsored_message.server_message_id.is_valid()) {
+        auto channel_id = sponsored_message.sponsor_dialog_id.get_channel_id();
+        auto t_me = G()->shared_config().get_option_string("t_me_url", "https://t.me/");
+        link = td_api::make_object<td_api::internalLinkTypeMessage>(
+            PSTRING() << t_me << "c/" << channel_id.get() << '/' << sponsored_message.server_message_id.get());
+      }
       break;
-    }
     default:
       break;
   }
@@ -288,6 +289,9 @@ void SponsoredMessageManager::view_sponsored_message(DialogId dialog_id, int32 s
                                                      Promise<Unit> &&promise) {
   if (!td_->messages_manager_->have_dialog_force(dialog_id, "view_sponsored_message")) {
     return promise.set_error(Status::Error(400, "Chat not found"));
+  }
+  if (!td_->messages_manager_->is_dialog_opened(dialog_id)) {
+    return promise.set_value(Unit());
   }
 
   auto it = dialog_sponsored_messages_.find(dialog_id);
