@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -66,7 +66,7 @@ class ClosureEvent final : public CustomEvent {
     return new ClosureEvent<ClosureT>(closure_.clone());
   }
   template <class... ArgsT>
-  explicit ClosureEvent(ArgsT &&... args) : closure_(std::forward<ArgsT>(args)...) {
+  explicit ClosureEvent(ArgsT &&...args) : closure_(std::forward<ArgsT>(args)...) {
   }
 
   void start_migrate(int32 sched_id) final {
@@ -152,7 +152,7 @@ class Event {
         new ClosureEvent<typename FromImmediateClosureT::Delayed>(std::forward<FromImmediateClosureT>(closure)));
   }
   template <class... ArgsT>
-  static Event delayed_closure(ArgsT &&... args) {
+  static Event delayed_closure(ArgsT &&...args) {
     using DelayedClosureT = decltype(create_delayed_closure(std::forward<ArgsT>(args)...));
     return custom(new ClosureEvent<DelayedClosureT>(std::forward<ArgsT>(args)...));
   }

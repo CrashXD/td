@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -1307,7 +1307,9 @@ void WebPagesManager::on_web_page_changed(WebPageId web_page_id, bool have_web_p
       }
     }
     if (have_web_page) {
-      CHECK(web_page_messages_[web_page_id].size() == full_message_ids.size());
+      LOG_CHECK(web_page_messages_[web_page_id].size() == full_message_ids.size())
+          << full_message_ids << ' '
+          << std::vector<FullMessageId>(web_page_messages_[web_page_id].begin(), web_page_messages_[web_page_id].end());
     } else {
       CHECK(web_page_messages_.count(web_page_id) == 0);
     }

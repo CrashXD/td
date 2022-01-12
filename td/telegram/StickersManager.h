@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -705,6 +705,8 @@ class StickersManager final : public Actor {
   void on_get_emoji_keywords_difference(
       const string &language_code, int32 from_version,
       Result<telegram_api::object_ptr<telegram_api::emojiKeywordsDifference>> &&result);
+
+  void finish_get_emoji_keywords_difference(string language_code, int32 version);
 
   void on_get_emoji_suggestions_url(int64 random_id, Promise<Unit> &&promise,
                                     Result<telegram_api::object_ptr<telegram_api::emojiURL>> &&r_emoji_url);

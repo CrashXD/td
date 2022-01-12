@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -79,6 +79,8 @@ class DialogFilter {
   static std::unordered_map<string, string> icon_name_to_emoji_;
 
   static void init_icon_names();
+
+  string get_chosen_or_default_icon_name() const;
 };
 
 inline bool operator==(const DialogFilter &lhs, const DialogFilter &rhs) {

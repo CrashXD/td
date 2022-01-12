@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -117,8 +117,8 @@ void StorageManager::run_gc(FileGcParameters parameters, bool return_deleted_fil
     close_gc_worker();
   }
 
-  bool split_by_owner_dialog_id = !parameters.owner_dialog_ids.empty() ||
-                                  !parameters.exclude_owner_dialog_ids.empty() || parameters.dialog_limit != 0;
+  bool split_by_owner_dialog_id = !parameters.owner_dialog_ids_.empty() ||
+                                  !parameters.exclude_owner_dialog_ids_.empty() || parameters.dialog_limit_ != 0;
   get_storage_stats(
       true /*need_all_files*/, split_by_owner_dialog_id,
       PromiseCreator::lambda(
@@ -156,7 +156,7 @@ void StorageManager::create_stats_worker() {
 }
 
 void StorageManager::on_all_files(FileGcParameters gc_parameters, Result<FileStats> r_file_stats) {
-  int32 dialog_limit = gc_parameters.dialog_limit;
+  int32 dialog_limit = gc_parameters.dialog_limit_;
   if (is_closed_ && r_file_stats.is_ok()) {
     r_file_stats = Global::request_aborted_error();
   }

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -49,7 +49,7 @@ class AuthManager final : public NetActor {
 
   void on_update_login_token();
 
-  void on_authorization_lost(const string &source);
+  void on_authorization_lost(string source);
   void on_closing(bool destroy_flag);
 
   // can return nullptr if state isn't initialized yet

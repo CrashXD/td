@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -240,9 +240,9 @@ void DeviceTokenManager::register_device(tl_object_ptr<td_api::DeviceToken> devi
       return promise.set_error(Status::Error(400, "Invalid user_id among other user_ids"));
     }
   }
+  auto input_user_ids = UserId::get_input_user_ids(other_user_ids);
 
   auto &info = tokens_[token_type];
-  info.net_query_id = 0;
   if (token.empty()) {
     if (info.token.empty()) {
       // already unregistered
@@ -251,10 +251,17 @@ void DeviceTokenManager::register_device(tl_object_ptr<td_api::DeviceToken> devi
 
     info.state = TokenInfo::State::Unregister;
   } else {
+    if ((info.state == TokenInfo::State::Reregister || info.state == TokenInfo::State::Sync) && info.token == token &&
+        info.other_user_ids == input_user_ids && info.is_app_sandbox == is_app_sandbox && encrypt == info.encrypt) {
+      int64 push_token_id = encrypt ? info.encryption_key_id : G()->get_my_id();
+      return promise.set_value(td_api::make_object<td_api::pushReceiverId>(push_token_id));
+    }
+
     info.state = TokenInfo::State::Register;
     info.token = std::move(token);
   }
-  info.other_user_ids = UserId::get_input_user_ids(other_user_ids);
+  info.net_query_id = 0;
+  info.other_user_ids = std::move(input_user_ids);
   info.is_app_sandbox = is_app_sandbox;
   if (encrypt != info.encrypt) {
     if (encrypt) {

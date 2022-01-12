@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -27,8 +27,6 @@ class SqliteKeyValue {
     return connection.exec(PSLICE() << "CREATE TABLE IF NOT EXISTS " << table_name << " (k BLOB PRIMARY KEY, v BLOB)");
   }
 
-  using SeqNo = uint64;
-
   bool empty() const {
     return db_.empty();
   }
@@ -41,18 +39,22 @@ class SqliteKeyValue {
 
   Status drop();
 
-  SeqNo set(Slice key, Slice value);
+  void set(Slice key, Slice value);
+
+  void set_all(const std::unordered_map<string, string> &key_values);
 
   string get(Slice key);
 
-  SeqNo erase(Slice key);
+  void erase(Slice key);
 
   Status begin_read_transaction() TD_WARN_UNUSED_RESULT {
     return db_.begin_read_transaction();
   }
+
   Status begin_write_transaction() TD_WARN_UNUSED_RESULT {
     return db_.begin_write_transaction();
   }
+
   Status commit_transaction() TD_WARN_UNUSED_RESULT {
     return db_.commit_transaction();
   }

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -83,7 +83,7 @@ class ImmediateClosure {
 
 template <class ActorT, class ResultT, class... DestArgsT, class... SrcArgsT>
 ImmediateClosure<ActorT, ResultT (ActorT::*)(DestArgsT...), SrcArgsT &&...> create_immediate_closure(
-    ResultT (ActorT::*func)(DestArgsT...), SrcArgsT &&... args) {
+    ResultT (ActorT::*func)(DestArgsT...), SrcArgsT &&...args) {
   return ImmediateClosure<ActorT, ResultT (ActorT::*)(DestArgsT...), SrcArgsT &&...>(func,
                                                                                      std::forward<SrcArgsT>(args)...);
 }
@@ -160,7 +160,7 @@ DelayedClosure<ArgsT...> to_delayed_closure(DelayedClosure<ArgsT...> &&other) {
 }
 
 template <class ActorT, class ResultT, class... DestArgsT, class... SrcArgsT>
-auto create_delayed_closure(ResultT (ActorT::*func)(DestArgsT...), SrcArgsT &&... args) {
+auto create_delayed_closure(ResultT (ActorT::*func)(DestArgsT...), SrcArgsT &&...args) {
   return DelayedClosure<ActorT, ResultT (ActorT::*)(DestArgsT...), SrcArgsT &&...>(func,
                                                                                    std::forward<SrcArgsT>(args)...);
 }

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -312,8 +312,8 @@ vector<string> LanguagePackManager::get_used_language_codes() {
     result.push_back(language_code_);
   }
   if (info == nullptr) {
-    LOG(WARNING) << "Failed to find information about chosen language " << language_code_
-                 << ", ensure that valid language pack ID is used";
+    LOG(INFO) << "Failed to find information about chosen language " << language_code_
+              << ", ensure that valid language pack ID is used";
     if (!is_custom_language_code(language_code_)) {
       search_language_info(language_code_, Auto());
     }

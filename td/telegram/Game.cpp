@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -90,10 +90,10 @@ bool Game::has_input_media() const {
 }
 
 tl_object_ptr<telegram_api::inputMediaGame> Game::get_input_media_game(const Td *td) const {
-  auto input_user = td->contacts_manager_->get_input_user(bot_user_id_);
-  CHECK(input_user != nullptr);
+  auto r_input_user = td->contacts_manager_->get_input_user(bot_user_id_);
+  CHECK(r_input_user.is_ok());
   return make_tl_object<telegram_api::inputMediaGame>(
-      make_tl_object<telegram_api::inputGameShortName>(std::move(input_user), short_name_));
+      make_tl_object<telegram_api::inputGameShortName>(r_input_user.move_as_ok(), short_name_));
 }
 
 bool operator==(const Game &lhs, const Game &rhs) {

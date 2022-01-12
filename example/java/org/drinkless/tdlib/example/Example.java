@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -248,7 +248,7 @@ public final class Example {
     private static void getMainChatList(final int limit) {
         synchronized (mainChatList) {
             if (!haveFullMainChatList && limit > mainChatList.size()) {
-                // send GetChats request if there are some unknown chats and have not enough known chats
+                // send LoadChats request if there are some unknown chats and have not enough known chats
                 client.send(new TdApi.LoadChats(new TdApi.ChatListMain(), limit - mainChatList.size()), new Client.ResultHandler() {
                     @Override
                     public void onResult(TdApi.Object object) {
@@ -259,7 +259,7 @@ public final class Example {
                                         haveFullMainChatList = true;
                                     }
                                 } else {
-                                    System.err.println("Receive an error for GetChats:" + newLine + object);
+                                    System.err.println("Receive an error for LoadChats:" + newLine + object);
                                 }
                                 break;
                             case TdApi.Ok.CONSTRUCTOR:

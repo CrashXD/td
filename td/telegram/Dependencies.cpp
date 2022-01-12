@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -67,6 +67,10 @@ bool resolve_dependencies_force(Td *td, const Dependencies &dependencies, const 
   }
   for (auto channel_id : dependencies.channel_ids) {
     if (channel_id.is_valid() && !td->contacts_manager_->have_channel_force(channel_id)) {
+      if (td->contacts_manager_->have_min_channel(channel_id)) {
+        LOG(INFO) << "Can't find " << channel_id << " from " << source << ", but have it as a min-channel";
+        continue;
+      }
       LOG(ERROR) << "Can't find " << channel_id << " from " << source;
       success = false;
     }

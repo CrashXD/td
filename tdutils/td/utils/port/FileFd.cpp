@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -103,7 +103,7 @@ StringBuilder &operator<<(StringBuilder &sb, const PrintFlags &print_flags) {
 namespace detail {
 class FileFdImpl {
  public:
-  PollableFdInfo info;
+  PollableFdInfo info_;
 };
 }  // namespace detail
 
@@ -242,8 +242,8 @@ Result<FileFd> FileFd::open(CSlice filepath, int32 flags, int32 mode) {
 
 FileFd FileFd::from_native_fd(NativeFd native_fd) {
   auto impl = make_unique<detail::FileFdImpl>();
-  impl->info.set_native_fd(std::move(native_fd));
-  impl->info.add_flags(PollFlags::Write());
+  impl->info_.set_native_fd(std::move(native_fd));
+  impl->info_.add_flags(PollFlags::Write());
   return FileFd(std::move(impl));
 }
 
@@ -648,11 +648,11 @@ Status FileFd::truncate_to_current_position(int64 current_position) {
 }
 PollableFdInfo &FileFd::get_poll_info() {
   CHECK(!empty());
-  return impl_->info;
+  return impl_->info_;
 }
 const PollableFdInfo &FileFd::get_poll_info() const {
   CHECK(!empty());
-  return impl_->info;
+  return impl_->info_;
 }
 
 }  // namespace td

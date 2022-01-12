@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2021
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -8,6 +8,8 @@
 
 #include "td/telegram/ContactsManager.h"
 #include "td/telegram/Td.h"
+
+#include "td/utils/logging.h"
 
 namespace td {
 
@@ -290,7 +292,6 @@ bool operator==(const unique_ptr<DialogActionBar> &lhs, const unique_ptr<DialogA
          lhs->join_request_dialog_title_ == rhs->join_request_dialog_title_ &&
          lhs->is_join_request_broadcast_ == lhs->is_join_request_broadcast_ &&
          lhs->join_request_date_ == rhs->join_request_date_;
-  ;
 }
 
 }  // namespace td
