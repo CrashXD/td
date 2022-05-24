@@ -48,6 +48,7 @@ class MessagesManager;
 class MtprotoHeader;
 class NetQueryDispatcher;
 class NotificationManager;
+class NotificationSettingsManager;
 class OptionManager;
 class PasswordManager;
 class SecretChatsManager;
@@ -82,6 +83,8 @@ class Global final : public ActorContext {
     LOG_CHECK(td_db_) << close_flag() << " " << file << " " << line;
     return td_db_.get();
   }
+
+  void log_out(Slice reason);
 
   void close_all(Promise<> on_finished);
   void close_and_destroy_all(Promise<> on_finished);
@@ -270,6 +273,13 @@ class Global final : public ActorContext {
     notification_manager_ = notification_manager;
   }
 
+  ActorId<NotificationSettingsManager> notification_settings_manager() const {
+    return notification_settings_manager_;
+  }
+  void set_notification_settings_manager(ActorId<NotificationSettingsManager> notification_settings_manager) {
+    notification_settings_manager_ = notification_settings_manager;
+  }
+
   ActorId<OptionManager> option_manager() const {
     return option_manager_;
   }
@@ -420,6 +430,8 @@ class Global final : public ActorContext {
     return close_flag();
   }
 
+  static int32 get_retry_after(int32 error_code, Slice error_message);
+
   const std::vector<std::shared_ptr<NetStatsCallback>> &get_net_stats_file_callbacks() {
     return net_stats_file_callbacks_;
   }
@@ -455,6 +467,7 @@ class Global final : public ActorContext {
   ActorId<LinkManager> link_manager_;
   ActorId<MessagesManager> messages_manager_;
   ActorId<NotificationManager> notification_manager_;
+  ActorId<NotificationSettingsManager> notification_settings_manager_;
   ActorId<OptionManager> option_manager_;
   ActorId<PasswordManager> password_manager_;
   ActorId<SecretChatsManager> secret_chats_manager_;

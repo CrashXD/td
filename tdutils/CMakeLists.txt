@@ -28,9 +28,11 @@ if (CRC32C_FOUND)
   set(TD_HAVE_CRC32C 1)
 endif()
 
-find_package(ABSL QUIET)
-if (ABSL_FOUND)
-  set(TD_HAVE_ABSL 1)
+if (TD_WITH_ABSEIL)
+  find_package(ABSL QUIET)
+  if (ABSL_FOUND)
+    set(TD_HAVE_ABSL 1)
+  endif()
 endif()
 
 configure_file(td/utils/config.h.in td/utils/config.h @ONLY)
@@ -287,6 +289,7 @@ set(TDUTILS_SOURCE
   td/utils/utf8.h
   td/utils/Variant.h
   td/utils/VectorQueue.h
+  td/utils/WaitFreeHashMap.h
 )
 
 if (TDUTILS_MIME_TYPE)
@@ -303,6 +306,7 @@ set(TDUTILS_TEST_SOURCE
   ${CMAKE_CURRENT_SOURCE_DIR}/test/ChainScheduler.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/ConcurrentHashMap.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/crypto.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/emoji.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/Enumerator.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/EpochBasedMemoryReclamation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/filesystem.cpp
@@ -326,6 +330,7 @@ set(TDUTILS_TEST_SOURCE
   ${CMAKE_CURRENT_SOURCE_DIR}/test/SharedSlice.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/StealingQueue.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/variant.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/WaitFreeHashMap.cpp
   PARENT_SCOPE
 )
 
@@ -395,12 +400,12 @@ install(TARGETS tdutils EXPORT TdTargets
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
 )
 
-if (TD_TEST_FOLLY)
+if (TD_TEST_FOLLY AND ABSL_FOUND)
   find_package(benchmark QUIET)
   find_package(folly QUIET)
   find_package(gflags QUIET)
 
-  if (ABSL_FOUND AND benchmark_FOUND AND folly_FOUND)
+  if (benchmark_FOUND AND folly_FOUND)
     add_executable(benchmark-hashset test/hashset_benchmark.cpp)
     target_link_libraries(benchmark-hashset PRIVATE tdutils benchmark::benchmark Folly::folly absl::flat_hash_map absl::hash)
   endif()

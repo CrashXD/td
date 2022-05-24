@@ -305,10 +305,10 @@ class FileView {
     return get_type() == FileType::Encrypted;
   }
   bool is_encrypted_secure() const {
-    return get_type() == FileType::Secure;
+    return get_type() == FileType::SecureEncrypted;
   }
   bool is_secure() const {
-    return get_type() == FileType::Secure || get_type() == FileType::SecureRaw;
+    return get_type() == FileType::SecureEncrypted || get_type() == FileType::SecureDecrypted;
   }
   bool is_encrypted_any() const {
     return is_encrypted_secret() || is_encrypted_secure();
@@ -370,9 +370,6 @@ class FileManager final : public FileLoadManager::Callback {
     UploadCallback(const UploadCallback &) = delete;
     UploadCallback &operator=(const UploadCallback &) = delete;
     virtual ~UploadCallback() = default;
-
-    virtual void on_progress(FileId file_id) {
-    }
 
     // After on_upload_ok all uploads of this file will be paused till merge, delete_partial_remote_location or
     // explicit upload request with the same file_id.

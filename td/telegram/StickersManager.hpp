@@ -10,7 +10,7 @@
 
 #include "td/telegram/files/FileId.hpp"
 #include "td/telegram/misc.h"
-#include "td/telegram/Photo.hpp"
+#include "td/telegram/PhotoSize.hpp"
 #include "td/telegram/StickerFormat.h"
 #include "td/telegram/StickersManager.h"
 #include "td/telegram/Td.h"
@@ -341,7 +341,7 @@ void StickersManager::parse_sticker_set(StickerSet *sticker_set, ParserT &parser
         vector<string> emojis;
         parse(emojis, parser);
         for (auto &emoji : emojis) {
-          auto cleaned_emoji = remove_emoji_modifiers(emoji).str();
+          auto cleaned_emoji = remove_emoji_modifiers(emoji);
           if (!cleaned_emoji.empty()) {
             auto &sticker_ids = sticker_set->emoji_stickers_map_[cleaned_emoji];
             if (sticker_ids.empty() || sticker_ids.back() != sticker_id) {

@@ -3274,9 +3274,17 @@ Result<vector<MessageEntity>> get_message_entities(const ContactsManager *contac
         if (!clean_input_string(entity->url_)) {
           return Status::Error(400, "MessageEntityTextUrl.url must be encoded in UTF-8");
         }
+        auto user_id = LinkManager::get_link_user_id(entity->url_);
+        if (user_id.is_valid()) {
+          if (contacts_manager != nullptr) {
+            TRY_STATUS(contacts_manager->get_input_user(user_id));
+          }
+          entities.emplace_back(offset, length, user_id);
+          break;
+        }
         auto r_url = LinkManager::check_link(entity->url_);
         if (r_url.is_error()) {
-          return Status::Error(400, PSTRING() << "Wrong message input_entity: " << r_url.error().message());
+          return Status::Error(400, PSTRING() << "Wrong URL entity specified: " << r_url.error().message());
         }
         entities.emplace_back(MessageEntity::Type::TextUrl, offset, length, r_url.move_as_ok());
         break;
@@ -3284,8 +3292,8 @@ Result<vector<MessageEntity>> get_message_entities(const ContactsManager *contac
       case td_api::textEntityTypeMentionName::ID: {
         auto entity = static_cast<td_api::textEntityTypeMentionName *>(input_entity->type_.get());
         UserId user_id(entity->user_id_);
-        if (contacts_manager != nullptr && !contacts_manager->have_input_user(user_id)) {
-          return Status::Error(400, "Have no access to the user");
+        if (contacts_manager != nullptr) {
+          TRY_STATUS(contacts_manager->get_input_user(user_id));
         }
         entities.emplace_back(offset, length, user_id);
         break;
@@ -3424,12 +3432,13 @@ vector<MessageEntity> get_message_entities(const ContactsManager *contacts_manag
           LOG(ERROR) << "Receive invalid " << user_id << " in MentionName from " << source;
           continue;
         }
-        if (contacts_manager == nullptr || !contacts_manager->have_user(user_id)) {
+        if (contacts_manager == nullptr) {
           LOG(ERROR) << "Receive unknown " << user_id << " in MentionName from " << source;
           continue;
         }
-        if (!contacts_manager->have_input_user(user_id)) {
-          LOG(ERROR) << "Receive inaccessible " << user_id << " in MentionName from " << source;
+        auto r_input_user = contacts_manager->get_input_user(user_id);
+        if (r_input_user.is_error()) {
+          LOG(ERROR) << "Receive wrong " << user_id << ": " << r_input_user.error() << " from " << source;
           continue;
         }
         entities.emplace_back(entity->offset_, entity->length_, user_id);

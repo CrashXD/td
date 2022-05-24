@@ -7,6 +7,7 @@
 #include "td/telegram/OptionManager.h"
 
 #include "td/telegram/AnimationsManager.h"
+#include "td/telegram/AttachMenuManager.h"
 #include "td/telegram/AuthManager.h"
 #include "td/telegram/ConfigManager.h"
 #include "td/telegram/ConfigShared.h"
@@ -34,6 +35,7 @@
 #include "td/utils/Status.h"
 
 #include <cmath>
+#include <functional>
 #include <limits>
 
 namespace td {
@@ -70,6 +72,46 @@ class SetDefaultReactionQuery final : public Td::ResultHandler {
 
 OptionManager::OptionManager(Td *td, ActorShared<> parent) : td_(td), parent_(std::move(parent)) {
   send_unix_time_update();
+
+  if (G()->shared_config().have_option("language_database_path")) {
+    G()->shared_config().set_option_string("language_pack_database_path",
+                                           G()->shared_config().get_option_string("language_database_path"));
+    G()->shared_config().set_option_empty("language_database_path");
+  }
+  if (G()->shared_config().have_option("language_pack")) {
+    G()->shared_config().set_option_string("localization_target",
+                                           G()->shared_config().get_option_string("language_pack"));
+    G()->shared_config().set_option_empty("language_pack");
+  }
+  if (G()->shared_config().have_option("language_code")) {
+    G()->shared_config().set_option_string("language_pack_id", G()->shared_config().get_option_string("language_code"));
+    G()->shared_config().set_option_empty("language_code");
+  }
+  if (!G()->shared_config().have_option("message_text_length_max")) {
+    G()->shared_config().set_option_integer("message_text_length_max", 4096);
+  }
+  if (!G()->shared_config().have_option("message_caption_length_max")) {
+    G()->shared_config().set_option_integer("message_caption_length_max", 1024);
+  }
+  if (!G()->shared_config().have_option("suggested_video_note_length")) {
+    G()->shared_config().set_option_integer("suggested_video_note_length", 384);
+  }
+  if (!G()->shared_config().have_option("suggested_video_note_video_bitrate")) {
+    G()->shared_config().set_option_integer("suggested_video_note_video_bitrate", 1000);
+  }
+  if (!G()->shared_config().have_option("suggested_video_note_audio_bitrate")) {
+    G()->shared_config().set_option_integer("suggested_video_note_audio_bitrate", 64);
+  }
+  if (!G()->shared_config().have_option("notification_sound_duration_max")) {
+    G()->shared_config().set_option_integer("notification_sound_duration_max", 5);
+  }
+  if (!G()->shared_config().have_option("notification_sound_size_max")) {
+    G()->shared_config().set_option_integer("notification_sound_size_max", 307200);
+  }
+  if (!G()->shared_config().have_option("notification_sound_count_max")) {
+    G()->shared_config().set_option_integer("notification_sound_count_max", G()->is_test_dc() ? 5 : 100);
+  }
+  G()->shared_config().set_option_integer("utc_time_offset", Clocks::tz_offset());
 }
 
 void OptionManager::tear_down() {
@@ -226,6 +268,7 @@ void OptionManager::on_option_updated(const string &name) {
         if (G()->mtproto_header().set_language_code(G()->shared_config().get_option_string(name))) {
           G()->net_query_dispatcher().update_mtproto_header();
         }
+        send_closure(td_->attach_menu_manager_actor_, &AttachMenuManager::reload_attach_menu_bots, Promise<Unit>());
       }
       if (name == "language_pack_version") {
         send_closure(td_->language_pack_manager_, &LanguagePackManager::on_language_pack_version_changed, false, -1);
@@ -376,14 +419,14 @@ void OptionManager::set_option(const string &name, td_api::object_ptr<td_api::Op
     if (name != option_name) {
       return false;
     }
-    if (value_constructor_id != td_api::optionValueInteger::ID &&
-        value_constructor_id != td_api::optionValueEmpty::ID) {
-      promise.set_error(Status::Error(400, PSLICE() << "Option \"" << name << "\" must have integer value"));
-      return false;
-    }
     if (value_constructor_id == td_api::optionValueEmpty::ID) {
       G()->shared_config().set_option_empty(option_name);
     } else {
+      if (value_constructor_id != td_api::optionValueInteger::ID) {
+        promise.set_error(Status::Error(400, PSLICE() << "Option \"" << name << "\" must have integer value"));
+        return false;
+      }
+
       int64 int_value = static_cast<td_api::optionValueInteger *>(value.get())->value_;
       if (int_value < min_value || int_value > max_value) {
         promise.set_error(Status::Error(400, PSLICE() << "Option's \"" << name << "\" value " << int_value
@@ -401,14 +444,14 @@ void OptionManager::set_option(const string &name, td_api::object_ptr<td_api::Op
     if (name != option_name) {
       return false;
     }
-    if (value_constructor_id != td_api::optionValueBoolean::ID &&
-        value_constructor_id != td_api::optionValueEmpty::ID) {
-      promise.set_error(Status::Error(400, PSLICE() << "Option \"" << name << "\" must have boolean value"));
-      return false;
-    }
     if (value_constructor_id == td_api::optionValueEmpty::ID) {
       G()->shared_config().set_option_empty(name);
     } else {
+      if (value_constructor_id != td_api::optionValueBoolean::ID) {
+        promise.set_error(Status::Error(400, PSLICE() << "Option \"" << name << "\" must have boolean value"));
+        return false;
+      }
+
       bool bool_value = static_cast<td_api::optionValueBoolean *>(value.get())->value_;
       G()->shared_config().set_option_boolean(name, bool_value);
     }
@@ -416,17 +459,18 @@ void OptionManager::set_option(const string &name, td_api::object_ptr<td_api::Op
     return true;
   };
 
-  auto set_string_option = [&](Slice option_name, auto check_value) {
+  auto set_string_option = [&](Slice option_name, std::function<bool(Slice)> check_value) {
     if (name != option_name) {
-      return false;
-    }
-    if (value_constructor_id != td_api::optionValueString::ID && value_constructor_id != td_api::optionValueEmpty::ID) {
-      promise.set_error(Status::Error(400, PSLICE() << "Option \"" << name << "\" must have string value"));
       return false;
     }
     if (value_constructor_id == td_api::optionValueEmpty::ID) {
       G()->shared_config().set_option_empty(name);
     } else {
+      if (value_constructor_id != td_api::optionValueString::ID) {
+        promise.set_error(Status::Error(400, PSLICE() << "Option \"" << name << "\" must have string value"));
+        return false;
+      }
+
       const string &str_value = static_cast<td_api::optionValueString *>(value.get())->value_;
       if (str_value.empty()) {
         G()->shared_config().set_option_empty(name);
@@ -581,10 +625,10 @@ void OptionManager::set_option(const string &name, td_api::object_ptr<td_api::Op
         }
         bool is_online = value_constructor_id == td_api::optionValueEmpty::ID ||
                          static_cast<const td_api::optionValueBoolean *>(value.get())->value_;
+        td_->set_is_online(is_online);
         if (!is_bot) {
           send_closure(td_->state_manager_, &StateManager::on_online, is_online);
         }
-        td_->set_is_online(is_online);
         return promise.set_value(Unit());
       }
       break;

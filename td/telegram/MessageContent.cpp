@@ -46,6 +46,8 @@
 #include "td/telegram/Payments.hpp"
 #include "td/telegram/Photo.h"
 #include "td/telegram/Photo.hpp"
+#include "td/telegram/PhotoFormat.h"
+#include "td/telegram/PhotoSize.h"
 #include "td/telegram/PhotoSizeSource.h"
 #include "td/telegram/PollId.h"
 #include "td/telegram/PollId.hpp"
@@ -449,7 +451,7 @@ class MessageChatSetTtl final : public MessageContent {
 
 class MessageUnsupported final : public MessageContent {
  public:
-  static constexpr int32 CURRENT_VERSION = 10;
+  static constexpr int32 CURRENT_VERSION = 11;
   int32 version = CURRENT_VERSION;
 
   MessageUnsupported() = default;
@@ -665,7 +667,7 @@ class MessageDice final : public MessageContent {
 
   MessageDice() = default;
   MessageDice(const string &emoji, int32 dice_value)
-      : emoji(emoji.empty() ? string(DEFAULT_EMOJI) : remove_emoji_modifiers(emoji).str()), dice_value(dice_value) {
+      : emoji(emoji.empty() ? string(DEFAULT_EMOJI) : remove_emoji_modifiers(emoji)), dice_value(dice_value) {
   }
 
   MessageContentType get_type() const final {
@@ -742,6 +744,34 @@ class MessageChatSetTheme final : public MessageContent {
 
   MessageContentType get_type() const final {
     return MessageContentType::ChatSetTheme;
+  }
+};
+
+class MessageWebViewDataSent final : public MessageContent {
+ public:
+  string button_text;
+
+  MessageWebViewDataSent() = default;
+  explicit MessageWebViewDataSent(string &&button_text) : button_text(std::move(button_text)) {
+  }
+
+  MessageContentType get_type() const final {
+    return MessageContentType::WebViewDataSent;
+  }
+};
+
+class MessageWebViewDataReceived final : public MessageContent {
+ public:
+  string button_text;
+  string data;
+
+  MessageWebViewDataReceived() = default;
+  MessageWebViewDataReceived(string &&button_text, string &&data)
+      : button_text(std::move(button_text)), data(std::move(data)) {
+  }
+
+  MessageContentType get_type() const final {
+    return MessageContentType::WebViewDataReceived;
   }
 };
 
@@ -1046,6 +1076,17 @@ static void store(const MessageContent *content, StorerT &storer) {
     case MessageContentType::ChatSetTheme: {
       const auto *m = static_cast<const MessageChatSetTheme *>(content);
       store(m->emoji, storer);
+      break;
+    }
+    case MessageContentType::WebViewDataSent: {
+      const auto *m = static_cast<const MessageWebViewDataSent *>(content);
+      store(m->button_text, storer);
+      break;
+    }
+    case MessageContentType::WebViewDataReceived: {
+      const auto *m = static_cast<const MessageWebViewDataReceived *>(content);
+      store(m->button_text, storer);
+      store(m->data, storer);
       break;
     }
     default:
@@ -1468,6 +1509,19 @@ static void parse(unique_ptr<MessageContent> &content, ParserT &parser) {
       content = std::move(m);
       break;
     }
+    case MessageContentType::WebViewDataSent: {
+      auto m = make_unique<MessageWebViewDataSent>();
+      parse(m->button_text, parser);
+      content = std::move(m);
+      break;
+    }
+    case MessageContentType::WebViewDataReceived: {
+      auto m = make_unique<MessageWebViewDataReceived>();
+      parse(m->button_text, parser);
+      parse(m->data, parser);
+      content = std::move(m);
+      break;
+    }
     default:
       LOG(FATAL) << "Have unknown message content type " << static_cast<int32>(content_type);
   }
@@ -1686,7 +1740,7 @@ static Result<InputMessageContent> create_input_message_content(
 
       td->audios_manager_->create_audio(file_id, string(), thumbnail, std::move(file_name), std::move(mime_type),
                                         input_audio->duration_, std::move(input_audio->title_),
-                                        std::move(input_audio->performer_), false);
+                                        std::move(input_audio->performer_), 0, false);
 
       content = make_unique<MessageAudio>(file_id, std::move(caption));
       break;
@@ -2046,10 +2100,10 @@ Result<InputMessageContent> get_input_message_content(
                                       std::move(thumbnail), std::move(sticker_file_ids));
 }
 
-bool can_have_input_media(const Td *td, const MessageContent *content) {
+bool can_have_input_media(const Td *td, const MessageContent *content, bool is_server) {
   switch (content->get_type()) {
     case MessageContentType::Game:
-      return static_cast<const MessageGame *>(content)->game.has_input_media();
+      return is_server || static_cast<const MessageGame *>(content)->game.has_input_media();
     case MessageContentType::Poll:
       return td->poll_manager_->has_input_media(static_cast<const MessagePoll *>(content)->poll_id);
     case MessageContentType::Unsupported:
@@ -2081,6 +2135,8 @@ bool can_have_input_media(const Td *td, const MessageContent *content) {
     case MessageContentType::GroupCall:
     case MessageContentType::InviteToGroupCall:
     case MessageContentType::ChatSetTheme:
+    case MessageContentType::WebViewDataSent:
+    case MessageContentType::WebViewDataReceived:
       return false;
     case MessageContentType::Animation:
     case MessageContentType::Audio:
@@ -2196,6 +2252,8 @@ SecretInputMedia get_secret_input_media(const MessageContent *content, Td *td,
     case MessageContentType::GroupCall:
     case MessageContentType::InviteToGroupCall:
     case MessageContentType::ChatSetTheme:
+    case MessageContentType::WebViewDataSent:
+    case MessageContentType::WebViewDataReceived:
       break;
     default:
       UNREACHABLE();
@@ -2206,7 +2264,7 @@ SecretInputMedia get_secret_input_media(const MessageContent *content, Td *td,
 static tl_object_ptr<telegram_api::InputMedia> get_input_media_impl(
     const MessageContent *content, Td *td, tl_object_ptr<telegram_api::InputFile> input_file,
     tl_object_ptr<telegram_api::InputFile> input_thumbnail, int32 ttl, const string &emoji) {
-  if (!can_have_input_media(td, content)) {
+  if (!can_have_input_media(td, content, false)) {
     return nullptr;
   }
   switch (content->get_type()) {
@@ -2312,6 +2370,8 @@ static tl_object_ptr<telegram_api::InputMedia> get_input_media_impl(
     case MessageContentType::GroupCall:
     case MessageContentType::InviteToGroupCall:
     case MessageContentType::ChatSetTheme:
+    case MessageContentType::WebViewDataSent:
+    case MessageContentType::WebViewDataReceived:
       break;
     default:
       UNREACHABLE();
@@ -2375,36 +2435,30 @@ tl_object_ptr<telegram_api::InputMedia> get_fake_input_media(Td *td, tl_object_p
                                                              FileId file_id) {
   FileView file_view = td->file_manager_->get_file_view(file_id);
   auto file_type = file_view.get_type();
-  switch (file_type) {
-    case FileType::Animation:
-    case FileType::Audio:
-    case FileType::Document:
-    case FileType::Sticker:
-    case FileType::Video:
-    case FileType::VoiceNote: {
-      vector<tl_object_ptr<telegram_api::DocumentAttribute>> attributes;
-      auto file_path = file_view.suggested_path();
-      const PathView path_view(file_path);
-      Slice file_name = path_view.file_name();
-      if (!file_name.empty()) {
-        attributes.push_back(make_tl_object<telegram_api::documentAttributeFilename>(file_name.str()));
-      }
-      string mime_type = MimeType::from_extension(path_view.extension());
-      int32 flags = 0;
-      if (file_type == FileType::Video) {
-        flags |= telegram_api::inputMediaUploadedDocument::NOSOUND_VIDEO_MASK;
-      }
-      return make_tl_object<telegram_api::inputMediaUploadedDocument>(
-          flags, false /*ignored*/, false /*ignored*/, std::move(input_file), nullptr, mime_type, std::move(attributes),
-          vector<tl_object_ptr<telegram_api::InputDocument>>(), 0);
+  if (is_document_file_type(file_type)) {
+    vector<tl_object_ptr<telegram_api::DocumentAttribute>> attributes;
+    auto file_path = file_view.suggested_path();
+    const PathView path_view(file_path);
+    Slice file_name = path_view.file_name();
+    if (!file_name.empty()) {
+      attributes.push_back(make_tl_object<telegram_api::documentAttributeFilename>(file_name.str()));
     }
-    case FileType::Photo:
-      return make_tl_object<telegram_api::inputMediaUploadedPhoto>(
-          0, std::move(input_file), vector<tl_object_ptr<telegram_api::InputDocument>>(), 0);
-    default:
-      UNREACHABLE();
+    string mime_type = MimeType::from_extension(path_view.extension());
+    int32 flags = 0;
+    if (file_type == FileType::Video) {
+      flags |= telegram_api::inputMediaUploadedDocument::NOSOUND_VIDEO_MASK;
+    }
+    if (file_type == FileType::DocumentAsFile) {
+      flags |= telegram_api::inputMediaUploadedDocument::FORCE_FILE_MASK;
+    }
+    return make_tl_object<telegram_api::inputMediaUploadedDocument>(
+        flags, false /*ignored*/, false /*ignored*/, std::move(input_file), nullptr, mime_type, std::move(attributes),
+        vector<tl_object_ptr<telegram_api::InputDocument>>(), 0);
+  } else {
+    CHECK(file_type == FileType::Photo);
+    return make_tl_object<telegram_api::inputMediaUploadedPhoto>(
+        0, std::move(input_file), vector<tl_object_ptr<telegram_api::InputDocument>>(), 0);
   }
-  return nullptr;
 }
 
 void delete_message_content_thumbnail(MessageContent *content, Td *td) {
@@ -2476,6 +2530,8 @@ void delete_message_content_thumbnail(MessageContent *content, Td *td) {
     case MessageContentType::GroupCall:
     case MessageContentType::InviteToGroupCall:
     case MessageContentType::ChatSetTheme:
+    case MessageContentType::WebViewDataSent:
+    case MessageContentType::WebViewDataReceived:
       break;
     default:
       UNREACHABLE();
@@ -2489,9 +2545,10 @@ Status can_send_message_content(DialogId dialog_id, const MessageContent *conten
       case DialogType::User:
         return td->contacts_manager_->get_user_default_permissions(dialog_id.get_user_id());
       case DialogType::Chat:
-        return td->contacts_manager_->get_chat_permissions(dialog_id.get_chat_id()).get_restricted_rights();
+        return td->contacts_manager_->get_chat_permissions(dialog_id.get_chat_id()).get_effective_restricted_rights();
       case DialogType::Channel:
-        return td->contacts_manager_->get_channel_permissions(dialog_id.get_channel_id()).get_restricted_rights();
+        return td->contacts_manager_->get_channel_permissions(dialog_id.get_channel_id())
+            .get_effective_restricted_rights();
       case DialogType::SecretChat:
         return td->contacts_manager_->get_secret_chat_default_permissions(dialog_id.get_secret_chat_id());
       case DialogType::None:
@@ -2532,8 +2589,8 @@ Status can_send_message_content(DialogId dialog_id, const MessageContent *conten
       }
       break;
     case MessageContentType::Game:
-      if (dialog_type == DialogType::Channel && td->contacts_manager_->get_channel_type(dialog_id.get_channel_id()) ==
-                                                    ContactsManager::ChannelType::Broadcast) {
+      if (dialog_type == DialogType::Channel &&
+          td->contacts_manager_->is_broadcast_channel(dialog_id.get_channel_id())) {
         // return Status::Error(400, "Games can't be sent to channel chats");
       }
       if (dialog_type == DialogType::SecretChat) {
@@ -2571,8 +2628,7 @@ Status can_send_message_content(DialogId dialog_id, const MessageContent *conten
         return Status::Error(400, "Not enough rights to send polls to the chat");
       }
       if (dialog_type == DialogType::Channel &&
-          td->contacts_manager_->get_channel_type(dialog_id.get_channel_id()) ==
-              ContactsManager::ChannelType::Broadcast &&
+          td->contacts_manager_->is_broadcast_channel(dialog_id.get_channel_id()) &&
           !td->poll_manager_->get_poll_is_anonymous(static_cast<const MessagePoll *>(content)->poll_id)) {
         return Status::Error(400, "Non-anonymous polls can't be sent to channel chats");
       }
@@ -2644,6 +2700,8 @@ Status can_send_message_content(DialogId dialog_id, const MessageContent *conten
     case MessageContentType::GroupCall:
     case MessageContentType::InviteToGroupCall:
     case MessageContentType::ChatSetTheme:
+    case MessageContentType::WebViewDataSent:
+    case MessageContentType::WebViewDataReceived:
       UNREACHABLE();
   }
   return Status::OK();
@@ -2770,6 +2828,8 @@ static int32 get_message_content_media_index_mask(const MessageContent *content,
     case MessageContentType::GroupCall:
     case MessageContentType::InviteToGroupCall:
     case MessageContentType::ChatSetTheme:
+    case MessageContentType::WebViewDataSent:
+    case MessageContentType::WebViewDataReceived:
       return 0;
     default:
       UNREACHABLE();
@@ -3241,10 +3301,7 @@ void merge_message_contents(Td *td, const MessageContent *old_content, MessageCo
         }
         need_update = true;
       }
-      if (old_->caption != new_->caption) {
-        need_update = true;
-      }
-      if (old_->is_listened != new_->is_listened) {
+      if (old_->caption != new_->caption || old_->is_listened != new_->is_listened) {
         need_update = true;
       }
       break;
@@ -3411,10 +3468,7 @@ void merge_message_contents(Td *td, const MessageContent *old_content, MessageCo
     case MessageContentType::PassportDataReceived: {
       const auto *old_ = static_cast<const MessagePassportDataReceived *>(old_content);
       const auto *new_ = static_cast<const MessagePassportDataReceived *>(new_content);
-      if (old_->values != new_->values) {
-        need_update = true;
-      }
-      if (old_->credentials != new_->credentials) {
+      if (old_->values != new_->values || old_->credentials != new_->credentials) {
         need_update = true;
       }
       break;
@@ -3471,6 +3525,22 @@ void merge_message_contents(Td *td, const MessageContent *old_content, MessageCo
       const auto *old_ = static_cast<const MessageChatSetTheme *>(old_content);
       const auto *new_ = static_cast<const MessageChatSetTheme *>(new_content);
       if (old_->emoji != new_->emoji) {
+        need_update = true;
+      }
+      break;
+    }
+    case MessageContentType::WebViewDataSent: {
+      const auto *old_ = static_cast<const MessageWebViewDataSent *>(old_content);
+      const auto *new_ = static_cast<const MessageWebViewDataSent *>(new_content);
+      if (old_->button_text != new_->button_text) {
+        need_update = true;
+      }
+      break;
+    }
+    case MessageContentType::WebViewDataReceived: {
+      const auto *old_ = static_cast<const MessageWebViewDataReceived *>(old_content);
+      const auto *new_ = static_cast<const MessageWebViewDataReceived *>(new_content);
+      if (old_->button_text != new_->button_text || old_->data != new_->data) {
         need_update = true;
       }
       break;
@@ -3611,6 +3681,8 @@ bool merge_message_content_file_id(Td *td, MessageContent *message_content, File
     case MessageContentType::GroupCall:
     case MessageContentType::InviteToGroupCall:
     case MessageContentType::ChatSetTheme:
+    case MessageContentType::WebViewDataSent:
+    case MessageContentType::WebViewDataReceived:
       LOG(ERROR) << "Receive new file " << new_file_id << " in a sent message of the type " << content_type;
       break;
     default:
@@ -4284,10 +4356,10 @@ unique_ptr<MessageContent> dup_message_content(Td *td, DialogId dialog_id, const
                                                MessageContentDupType type, MessageCopyOptions &&copy_options) {
   CHECK(content != nullptr);
   if (copy_options.send_copy) {
-    CHECK(type == MessageContentDupType::Copy);
+    CHECK(type == MessageContentDupType::Copy || type == MessageContentDupType::ServerCopy);
   }
   if (type != MessageContentDupType::Forward && type != MessageContentDupType::SendViaBot &&
-      !can_have_input_media(td, content)) {
+      !can_have_input_media(td, content, type == MessageContentDupType::ServerCopy)) {
     return nullptr;
   }
 
@@ -4308,7 +4380,8 @@ unique_ptr<MessageContent> dup_message_content(Td *td, DialogId dialog_id, const
   if (to_secret) {
     thumbnail_file_id = get_message_content_thumbnail_file_id(content, td);
   }
-  auto replace_caption = type == MessageContentDupType::Copy && copy_options.replace_caption;
+  auto replace_caption = (type == MessageContentDupType::Copy || type == MessageContentDupType::ServerCopy) &&
+                         copy_options.replace_caption;
   switch (content->get_type()) {
     case MessageContentType::Animation: {
       auto result = make_unique<MessageAnimation>(*static_cast<const MessageAnimation *>(content));
@@ -4438,7 +4511,7 @@ unique_ptr<MessageContent> dup_message_content(Td *td, DialogId dialog_id, const
       return std::move(result);
     }
     case MessageContentType::Poll:
-      if (type == MessageContentDupType::Copy) {
+      if (type == MessageContentDupType::Copy || type == MessageContentDupType::ServerCopy) {
         return make_unique<MessagePoll>(
             td->poll_manager_->dup_poll(static_cast<const MessagePoll *>(content)->poll_id));
       } else {
@@ -4521,6 +4594,8 @@ unique_ptr<MessageContent> dup_message_content(Td *td, DialogId dialog_id, const
     case MessageContentType::GroupCall:
     case MessageContentType::InviteToGroupCall:
     case MessageContentType::ChatSetTheme:
+    case MessageContentType::WebViewDataSent:
+    case MessageContentType::WebViewDataReceived:
       return nullptr;
     default:
       UNREACHABLE();
@@ -4785,6 +4860,22 @@ unique_ptr<MessageContent> get_action_message_content(Td *td, tl_object_ptr<tele
     }
     case telegram_api::messageActionChatJoinedByRequest::ID:
       return make_unique<MessageChatJoinedByLink>(true);
+    case telegram_api::messageActionWebViewDataSent::ID: {
+      if (td->auth_manager_->is_bot()) {
+        LOG(ERROR) << "Receive messageActionWebViewDataSent in " << owner_dialog_id;
+        break;
+      }
+      auto data_sent = move_tl_object_as<telegram_api::messageActionWebViewDataSent>(action);
+      return td::make_unique<MessageWebViewDataSent>(std::move(data_sent->text_));
+    }
+    case telegram_api::messageActionWebViewDataSentMe::ID: {
+      if (!td->auth_manager_->is_bot()) {
+        LOG(ERROR) << "Receive messageActionWebViewDataSentMe in " << owner_dialog_id;
+        break;
+      }
+      auto data_sent = move_tl_object_as<telegram_api::messageActionWebViewDataSentMe>(action);
+      return td::make_unique<MessageWebViewDataReceived>(std::move(data_sent->text_), std::move(data_sent->data_));
+    }
     default:
       UNREACHABLE();
   }
@@ -5032,6 +5123,14 @@ tl_object_ptr<td_api::MessageContent> get_message_content_object(const MessageCo
     case MessageContentType::ChatSetTheme: {
       const auto *m = static_cast<const MessageChatSetTheme *>(content);
       return make_tl_object<td_api::messageChatSetTheme>(m->emoji);
+    }
+    case MessageContentType::WebViewDataSent: {
+      const auto *m = static_cast<const MessageWebViewDataSent *>(content);
+      return make_tl_object<td_api::messageWebAppDataSent>(m->button_text);
+    }
+    case MessageContentType::WebViewDataReceived: {
+      const auto *m = static_cast<const MessageWebViewDataReceived *>(content);
+      return make_tl_object<td_api::messageWebAppDataReceived>(m->button_text, m->data);
     }
     default:
       UNREACHABLE();
@@ -5380,6 +5479,8 @@ string get_message_content_search_text(const Td *td, const MessageContent *conte
     case MessageContentType::GroupCall:
     case MessageContentType::InviteToGroupCall:
     case MessageContentType::ChatSetTheme:
+    case MessageContentType::WebViewDataSent:
+    case MessageContentType::WebViewDataReceived:
       return string();
     default:
       UNREACHABLE();
@@ -5401,17 +5502,17 @@ void get_message_content_animated_emoji_click_sticker(const MessageContent *cont
 }
 
 void on_message_content_animated_emoji_clicked(const MessageContent *content, FullMessageId full_message_id, Td *td,
-                                               Slice emoji, string data) {
+                                               string &&emoji, string &&data) {
   if (content->get_type() != MessageContentType::Text) {
     return;
   }
 
-  emoji = remove_emoji_modifiers(emoji);
+  remove_emoji_modifiers_in_place(emoji);
   auto &text = static_cast<const MessageText *>(content)->text;
   if (!text.entities.empty() || remove_emoji_modifiers(text.text) != emoji) {
     return;
   }
-  auto error = td->stickers_manager_->on_animated_emoji_message_clicked(emoji, full_message_id, data);
+  auto error = td->stickers_manager_->on_animated_emoji_message_clicked(std::move(emoji), full_message_id, data);
   if (error.is_error()) {
     LOG(WARNING) << "Failed to process animated emoji click with data \"" << data << "\": " << error;
   }
@@ -5627,6 +5728,10 @@ void add_message_content_dependencies(Dependencies &dependencies, const MessageC
     }
     case MessageContentType::ChatSetTheme:
       break;
+    case MessageContentType::WebViewDataSent:
+      break;
+    case MessageContentType::WebViewDataReceived:
+      break;
     default:
       UNREACHABLE();
       break;
@@ -5655,8 +5760,8 @@ bool is_unsent_animated_emoji_click(Td *td, DialogId dialog_id, const DialogActi
   return !td->stickers_manager_->is_sent_animated_emoji_click(dialog_id, remove_emoji_modifiers(emoji));
 }
 
-bool is_active_reaction(Td *td, const string &reaction) {
-  return td->stickers_manager_->is_active_reaction(reaction);
+void init_stickers_manager(Td *td) {
+  td->stickers_manager_->init();
 }
 
 void on_dialog_used(TopDialogCategory category, DialogId dialog_id, int32 date) {

@@ -31,11 +31,19 @@ Global::Global() = default;
 
 Global::~Global() = default;
 
+void Global::log_out(Slice reason) {
+  CHECK(shared_config_ != nullptr);
+  if (!shared_config_->have_option("auth")) {
+    shared_config_->set_option_string("auth", reason);
+  }
+}
+
 void Global::close_all(Promise<> on_finished) {
   td_db_->close_all(std::move(on_finished));
   state_manager_.clear();
   parameters_ = TdParameters();
 }
+
 void Global::close_and_destroy_all(Promise<> on_finished) {
   td_db_->close_and_destroy_all(std::move(on_finished));
   state_manager_.clear();
@@ -133,6 +141,23 @@ Status Global::init(const TdParameters &parameters, ActorId<Td> td, unique_ptr<T
   dns_time_difference_was_updated_ = false;
 
   return Status::OK();
+}
+
+int32 Global::get_retry_after(int32 error_code, Slice error_message) {
+  if (error_code != 429) {
+    return 0;
+  }
+
+  Slice retry_after_prefix("Too Many Requests: retry after ");
+  if (!begins_with(error_message, retry_after_prefix)) {
+    return 0;
+  }
+
+  auto r_retry_after = to_integer_safe<int32>(error_message.substr(retry_after_prefix.size()));
+  if (r_retry_after.is_ok() && r_retry_after.ok() > 0) {
+    return r_retry_after.ok();
+  }
+  return 0;
 }
 
 int32 Global::to_unix_time(double server_time) const {

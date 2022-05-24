@@ -6,6 +6,7 @@
 //
 #include "td/telegram/AuthManager.h"
 
+#include "td/telegram/AttachMenuManager.h"
 #include "td/telegram/AuthManager.hpp"
 #include "td/telegram/ConfigManager.h"
 #include "td/telegram/ConfigShared.h"
@@ -58,6 +59,7 @@ AuthManager::AuthManager(int32 api_id, const string &api_hash, ActorShared<> par
       ContactsManager::send_get_me_query(
           td_, PromiseCreator::lambda([this](Result<Unit> result) { update_state(State::Ok); }));
     }
+    G()->net_query_dispatcher().check_authorization_is_ok();
   } else if (auth_str == "logout") {
     LOG(WARNING) << "Continue to log out";
     update_state(State::LoggingOut);
@@ -786,6 +788,7 @@ void AuthManager::on_get_authorization(tl_object_ptr<telegram_api::auth_Authoriz
   if (auth->setup_password_required_ && auth->otherwise_relogin_days_ > 0) {
     G()->shared_config().set_option_integer("otherwise_relogin_days", auth->otherwise_relogin_days_);
   }
+  td_->attach_menu_manager_->init();
   td_->messages_manager_->on_authorization_success();
   td_->notification_manager_->init();
   td_->stickers_manager_->init();

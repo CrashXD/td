@@ -8,7 +8,7 @@
 
 #include "td/telegram/files/FileId.h"
 #include "td/telegram/files/FileSourceId.h"
-#include "td/telegram/Photo.h"
+#include "td/telegram/PhotoSize.h"
 #include "td/telegram/SecretInputMedia.h"
 #include "td/telegram/td_api.h"
 #include "td/telegram/telegram_api.h"
@@ -88,8 +88,6 @@ class AnimationsManager final : public Actor {
   FileId parse_animation(ParserT &parser);
 
   string get_animation_search_text(FileId file_id) const;
-
-  void after_get_difference();
 
   void get_current_state(vector<td_api::object_ptr<td_api::Update>> &updates) const;
 
