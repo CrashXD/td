@@ -6,7 +6,7 @@
 //
 #pragma once
 
-#include "td/telegram/PhotoSize.h"
+#include "td/telegram/Dimensions.h"
 #include "td/telegram/secret_api.h"
 #include "td/telegram/telegram_api.h"
 
@@ -30,7 +30,8 @@ struct SecretInputMedia {
 
   SecretInputMedia(tl_object_ptr<telegram_api::InputEncryptedFile> input_file, BufferSlice &&thumbnail,
                    Dimensions thumbnail_dimensions, const string &mime_type, const FileView &file_view,
-                   vector<tl_object_ptr<secret_api::DocumentAttribute>> &&attributes, const string &caption);
+                   vector<tl_object_ptr<secret_api::DocumentAttribute>> &&attributes, const string &caption,
+                   int32 layer);
 
   bool empty() const {
     return decrypted_media_ == nullptr;
