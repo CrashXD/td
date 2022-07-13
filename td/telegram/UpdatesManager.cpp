@@ -57,6 +57,7 @@
 #include "td/telegram/WebPagesManager.h"
 
 #include "td/actor/MultiPromise.h"
+#include "td/actor/PromiseFuture.h"
 
 #include "td/utils/algorithm.h"
 #include "td/utils/buffer.h"
@@ -372,12 +373,12 @@ void UpdatesManager::before_get_difference(bool is_initial) {
 
 Promise<> UpdatesManager::add_pts(int32 pts) {
   auto id = pts_manager_.add_pts(pts);
-  return PromiseCreator::event(self_closure(this, &UpdatesManager::on_pts_ack, id));
+  return create_event_promise(self_closure(this, &UpdatesManager::on_pts_ack, id));
 }
 
 Promise<> UpdatesManager::add_qts(int32 qts) {
   auto id = qts_manager_.add_pts(qts);
-  return PromiseCreator::event(self_closure(this, &UpdatesManager::on_qts_ack, id));
+  return create_event_promise(self_closure(this, &UpdatesManager::on_qts_ack, id));
 }
 
 void UpdatesManager::on_pts_ack(PtsManager::PtsId ack_token) {
@@ -1903,6 +1904,9 @@ void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Updat
         }
         downcast_call(*update, OnUpdate(this, update, get_promise()));
         update = nullptr;
+      } else if (is_channel_pts_update(update.get())) {
+        downcast_call(*update, OnUpdate(this, update, get_promise()));
+        update = nullptr;
       }
     }
   }
@@ -1923,7 +1927,7 @@ void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Updat
 
   if (!use_mpas && update_count == 1) {
     // still need to process the only update
-    lock = std::move(promise); // now we can use lock as the last promise
+    lock = std::move(promise);  // now we can use lock as the last promise
     update_count = 0;
   }
   if (need_postpone || running_get_difference_) {
@@ -2023,13 +2027,14 @@ void UpdatesManager::add_pending_qts_update(tl_object_ptr<telegram_api::Update> 
 
 void UpdatesManager::process_updates(vector<tl_object_ptr<telegram_api::Update>> &&updates, bool force_apply,
                                      Promise<Unit> &&promise) {
-  tl_object_ptr<telegram_api::updatePtsChanged> update_pts_changed;
-
   int32 update_count = 0;
   for (auto &update : updates) {
     if (update != nullptr) {
       update_count++;
     }
+  }
+  if (update_count == 0) {
+    return promise.set_value(Unit());
   }
 
   MultiPromiseActorSafe mpas{"OnProcessUpdatesMultiPromiseActor"};
@@ -2066,6 +2071,8 @@ void UpdatesManager::process_updates(vector<tl_object_ptr<telegram_api::Update>>
       }
     }
   */
+
+  tl_object_ptr<telegram_api::updatePtsChanged> update_pts_changed;
   for (auto &update : updates) {
     if (update != nullptr) {
       // process updateNewChannelMessage first
@@ -2286,11 +2293,14 @@ void UpdatesManager::postpone_pts_update(tl_object_ptr<telegram_api::Update> &&u
 void UpdatesManager::process_seq_updates(int32 seq_end, int32 date,
                                          vector<tl_object_ptr<telegram_api::Update>> &&updates,
                                          Promise<Unit> &&promise) {
-  string serialized_updates = PSTRING() << "process_seq_updates [seq_ = " << seq_ << ", seq_end = " << seq_end << "]: ";
-  // TODO remove after bugs will be fixed
-  for (auto &update : updates) {
-    if (update != nullptr) {
-      serialized_updates += oneline(to_string(update));
+  string serialized_updates;
+  if (date && seq_end) {
+    serialized_updates = PSTRING() << "process_seq_updates [seq_ = " << seq_ << ", seq_end = " << seq_end << "]: ";
+    // TODO remove after bugs will be fixed
+    for (auto &update : updates) {
+      if (update != nullptr) {
+        serialized_updates += oneline(to_string(update));
+      }
     }
   }
   process_updates(std::move(updates), false, std::move(promise));
@@ -3047,6 +3057,18 @@ int32 UpdatesManager::get_update_qts(const telegram_api::Update *update) {
       return static_cast<const telegram_api::updateBotChatInviteRequester *>(update)->qts_;
     default:
       return 0;
+  }
+}
+
+bool UpdatesManager::is_channel_pts_update(const telegram_api::Update *update) {
+  switch (update->get_id()) {
+    case telegram_api::updateNewChannelMessage::ID:
+    case telegram_api::updateEditChannelMessage::ID:
+    case telegram_api::updateDeleteChannelMessages::ID:
+    case telegram_api::updatePinnedChannelMessages::ID:
+      return true;
+    default:
+      return false;
   }
 }
 

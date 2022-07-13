@@ -134,7 +134,6 @@
 #include "td/mtproto/TransportType.h"
 
 #include "td/actor/actor.h"
-#include "td/actor/PromiseFuture.h"
 
 #include "td/utils/algorithm.h"
 #include "td/utils/buffer.h"
@@ -2894,8 +2893,8 @@ bool Td::is_authentication_request(int32 id) {
   }
 }
 
-bool Td::is_synchronous_request(int32 id) {
-  switch (id) {
+bool Td::is_synchronous_request(const td_api::Function *function) {
+  switch (function->get_id()) {
     case td_api::getTextEntities::ID:
     case td_api::parseTextEntities::ID:
     case td_api::parseMarkdown::ID:
@@ -2920,6 +2919,8 @@ bool Td::is_synchronous_request(int32 id) {
     case td_api::addLogMessage::ID:
     case td_api::testReturnError::ID:
       return true;
+    case td_api::getOption::ID:
+      return OptionManager::is_synchronous_option(static_cast<const td_api::getOption *>(function)->name_);
     default:
       return false;
   }
@@ -3009,6 +3010,14 @@ td_api::object_ptr<td_api::AuthorizationState> Td::get_fake_authorization_state_
   }
 }
 
+vector<td_api::object_ptr<td_api::Update>> Td::get_fake_current_state() const {
+  CHECK(state_ != State::Run);
+  vector<td_api::object_ptr<td_api::Update>> updates;
+  OptionManager::get_common_state(updates);
+  updates.push_back(td_api::make_object<td_api::updateAuthorizationState>(get_fake_authorization_state_object()));
+  return updates;
+}
+
 DbKey Td::as_db_key(string key) {
   // Database will still be effectively not encrypted, but
   // 1. SQLite database will be protected from corruption, because that's how sqlcipher works
@@ -3032,7 +3041,7 @@ void Td::request(uint64 id, tl_object_ptr<td_api::Function> function) {
   }
 
   VLOG(td_requests) << "Receive request " << id << ": " << to_string(function);
-  if (is_synchronous_request(function->get_id())) {
+  if (is_synchronous_request(function.get())) {
     // send response synchronously
     return send_result(id, static_request(std::move(function)));
   }
@@ -3056,14 +3065,9 @@ void Td::run_request(uint64 id, tl_object_ptr<td_api::Function> function) {
       case td_api::getAuthorizationState::ID:
         // send response synchronously to prevent "Request aborted"
         return send_result(id, get_fake_authorization_state_object());
-      case td_api::getCurrentState::ID: {
-        vector<td_api::object_ptr<td_api::Update>> updates;
-        updates.push_back(td_api::make_object<td_api::updateOption>(
-            "version", td_api::make_object<td_api::optionValueString>(TDLIB_VERSION)));
-        updates.push_back(td_api::make_object<td_api::updateAuthorizationState>(get_fake_authorization_state_object()));
+      case td_api::getCurrentState::ID:
         // send response synchronously to prevent "Request aborted"
-        return send_result(id, td_api::make_object<td_api::updates>(std::move(updates)));
-      }
+        return send_result(id, td_api::make_object<td_api::updates>(get_fake_current_state()));
       case td_api::close::ID:
         // need to send response before actual closing
         send_closure(actor_id(this), &Td::send_result, id, td_api::make_object<td_api::ok>());
@@ -3276,10 +3280,9 @@ void Td::start_up() {
   alarm_timeout_.set_callback_data(static_cast<void *>(this));
 
   CHECK(state_ == State::WaitParameters);
-  send_update(td_api::make_object<td_api::updateOption>("version",
-                                                        td_api::make_object<td_api::optionValueString>(TDLIB_VERSION)));
-  send_update(td_api::make_object<td_api::updateAuthorizationState>(
-      td_api::make_object<td_api::authorizationStateWaitTdlibParameters>()));
+  for (auto &update : get_fake_current_state()) {
+    send_update(std::move(update));
+  }
 }
 
 void Td::tear_down() {
@@ -4184,6 +4187,9 @@ void Td::send_error_impl(uint64 id, tl_object_ptr<td_api::error> error) {
   if (it != request_set_.end()) {
     request_set_.erase(it);
     VLOG(td_requests) << "Sending error for request " << id << ": " << oneline(to_string(error));
+    if (error->code_ == 0 && error->message_ == "Lost promise") {
+      LOG(FATAL) << "Lost promise for query " << id;
+    }
     callback_->on_error(id, std::move(error));
   }
 }
@@ -4318,7 +4324,9 @@ Status Td::set_parameters(td_api::object_ptr<td_api::tdlibParameters> parameters
   }
   if (options_.api_id != 21724) {
     //options_.application_version += ", TDLib ";
-    //options_.application_version += TDLIB_VERSION;
+    //auto version = OptionManager::get_option_synchronously("version");
+    //CHECK(version->get_id() == td_api::optionValueString::ID);
+    //options_.application_version += static_cast<const td_api::optionValueString *>(version.get())->value_;
   }
   options_.language_pack = "";
   options_.language_code = "";
@@ -8205,6 +8213,13 @@ td_api::object_ptr<td_api::Object> Td::do_static_request(td_api::parseMarkdown &
   return get_formatted_text_object(parsed_text, false, std::numeric_limits<int32>::max());
 }
 
+td_api::object_ptr<td_api::Object> Td::do_static_request(const td_api::getOption &request) {
+  if (!is_synchronous_request(&request)) {
+    return make_error(400, "The option can't be get synchronously");
+  }
+  return OptionManager::get_option_synchronously(request.name_);
+}
+
 td_api::object_ptr<td_api::Object> Td::do_static_request(td_api::getMarkdownText &request) {
   if (request.text_ == nullptr) {
     return make_error(400, "Text must be non-empty");
@@ -8428,7 +8443,5 @@ void Td::on_request(uint64 id, td_api::testCallVectorStringObject &request) {
 #undef CREATE_REQUEST
 #undef CREATE_REQUEST_PROMISE
 #undef CREATE_OK_REQUEST_PROMISE
-
-constexpr const char *Td::TDLIB_VERSION;
 
 }  // namespace td

@@ -13,8 +13,7 @@
 #include "td/db/DbKey.h"
 #include "td/db/KeyValueSyncInterface.h"
 
-#include "td/actor/PromiseFuture.h"
-
+#include "td/utils/Promise.h"
 #include "td/utils/Slice.h"
 #include "td/utils/Status.h"
 
@@ -125,7 +124,11 @@ class TdDb {
   std::shared_ptr<BinlogKeyValue<ConcurrentBinlog>> config_pmc_;
   std::shared_ptr<ConcurrentBinlog> binlog_;
 
-  Status init_sqlite(int32 scheduler_id, const TdParameters &parameters, const DbKey &key, const DbKey &old_key,
+  static void open_impl(TdParameters parameters, DbKey key, Promise<OpenedDatabase> &&promise);
+
+  static void check_parameters_impl(TdParameters parameters, Promise<CheckedParameters> promise);
+
+  Status init_sqlite(const TdParameters &parameters, const DbKey &key, const DbKey &old_key,
                      BinlogKeyValue<Binlog> &binlog_pmc);
 
   void do_close(Promise<> on_finished, bool destroy_flag);

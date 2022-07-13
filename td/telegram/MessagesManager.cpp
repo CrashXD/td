@@ -68,7 +68,6 @@
 #include "td/db/SqliteKeyValue.h"
 #include "td/db/SqliteKeyValueAsync.h"
 
-#include "td/actor/PromiseFuture.h"
 #include "td/actor/SleepActor.h"
 
 #include "td/utils/algorithm.h"
@@ -3212,11 +3211,11 @@ class SendMessageQuery final : public Td::ResultHandler {
         {{dialog_id, MessageContentType::Text},
          {dialog_id, is_copy ? MessageContentType::Photo : MessageContentType::Text}});
     if (G()->shared_config().get_option_boolean("use_quick_ack")) {
-      query->quick_ack_promise_ = PromiseCreator::lambda(
-          [random_id](Unit) {
-            send_closure(G()->messages_manager(), &MessagesManager::on_send_message_get_quick_ack, random_id);
-          },
-          PromiseCreator::Ignore());
+      query->quick_ack_promise_ = PromiseCreator::lambda([random_id](Result<Unit> result) {
+        if (result.is_ok()) {
+          send_closure(G()->messages_manager(), &MessagesManager::on_send_message_get_quick_ack, random_id);
+        }
+      });
     }
     *send_query_ref = query.get_weak();
     send_query(std::move(query));
@@ -3283,11 +3282,11 @@ class StartBotQuery final : public Td::ResultHandler {
         telegram_api::messages_startBot(std::move(bot_input_user), std::move(input_peer), random_id, parameter),
         {{dialog_id, MessageContentType::Text}, {dialog_id, MessageContentType::Photo}});
     if (G()->shared_config().get_option_boolean("use_quick_ack")) {
-      query->quick_ack_promise_ = PromiseCreator::lambda(
-          [random_id](Unit) {
-            send_closure(G()->messages_manager(), &MessagesManager::on_send_message_get_quick_ack, random_id);
-          },
-          PromiseCreator::Ignore());
+      query->quick_ack_promise_ = PromiseCreator::lambda([random_id](Result<Unit> result) {
+        if (result.is_ok()) {
+          send_closure(G()->messages_manager(), &MessagesManager::on_send_message_get_quick_ack, random_id);
+        }
+      });
     }
     auto send_query_ref = query.get_weak();
     send_query(std::move(query));
@@ -3525,11 +3524,11 @@ class SendMediaQuery final : public Td::ResultHandler {
             std::move(reply_markup), std::move(entities), schedule_date, std::move(as_input_peer)),
         {{dialog_id, content_type}, {dialog_id, is_copy ? MessageContentType::Text : content_type}});
     if (G()->shared_config().get_option_boolean("use_quick_ack") && was_uploaded_) {
-      query->quick_ack_promise_ = PromiseCreator::lambda(
-          [random_id](Unit) {
-            send_closure(G()->messages_manager(), &MessagesManager::on_send_message_get_quick_ack, random_id);
-          },
-          PromiseCreator::Ignore());
+      query->quick_ack_promise_ = PromiseCreator::lambda([random_id](Result<Unit> result) {
+        if (result.is_ok()) {
+          send_closure(G()->messages_manager(), &MessagesManager::on_send_message_get_quick_ack, random_id);
+        }
+      });
     }
     *send_query_ref = query.get_weak();
     send_query(std::move(query));
@@ -3889,13 +3888,13 @@ class ForwardMessagesQuery final : public Td::ResultHandler {
             std::move(random_ids), std::move(to_input_peer), schedule_date, std::move(as_input_peer)),
         {{to_dialog_id, MessageContentType::Text}, {to_dialog_id, MessageContentType::Photo}});
     if (G()->shared_config().get_option_boolean("use_quick_ack")) {
-      query->quick_ack_promise_ = PromiseCreator::lambda(
-          [random_ids = random_ids_](Unit) {
-            for (auto random_id : random_ids) {
-              send_closure(G()->messages_manager(), &MessagesManager::on_send_message_get_quick_ack, random_id);
-            }
-          },
-          PromiseCreator::Ignore());
+      query->quick_ack_promise_ = PromiseCreator::lambda([random_ids = random_ids_](Result<Unit> result) {
+        if (result.is_ok()) {
+          for (auto random_id : random_ids) {
+            send_closure(G()->messages_manager(), &MessagesManager::on_send_message_get_quick_ack, random_id);
+          }
+        }
+      });
     }
     send_query(std::move(query));
   }
@@ -20693,7 +20692,7 @@ Status MessagesManager::view_messages(DialogId dialog_id, MessageId top_thread_m
         for (auto file_id : get_message_file_ids(m)) {
           auto file_view = td_->file_manager_->get_file_view(file_id);
           CHECK(!file_view.empty());
-          td_->download_manager_->update_file_viewed(file_view.file_id(), file_source_id);
+          td_->download_manager_->update_file_viewed(file_view.get_main_file_id(), file_source_id);
         }
       }
 
@@ -22861,8 +22860,8 @@ void MessagesManager::remove_message_file_sources(DialogId dialog_id, const Mess
   if (file_source_id.is_valid()) {
     for (auto file_id : file_ids) {
       auto file_view = td_->file_manager_->get_file_view(file_id);
-      send_closure(td_->download_manager_actor_, &DownloadManager::remove_file, file_view.file_id(), file_source_id,
-                   false);
+      send_closure(td_->download_manager_actor_, &DownloadManager::remove_file, file_view.get_main_file_id(),
+                   file_source_id, false);
       td_->file_manager_->remove_file_source(file_id, file_source_id);
     }
   }
@@ -22888,8 +22887,8 @@ void MessagesManager::change_message_files(DialogId dialog_id, const Message *m,
       }
       if (file_source_id.is_valid()) {
         auto file_view = td_->file_manager_->get_file_view(file_id);
-        send_closure(td_->download_manager_actor_, &DownloadManager::remove_file, file_view.file_id(), file_source_id,
-                     false);
+        send_closure(td_->download_manager_actor_, &DownloadManager::remove_file, file_view.get_main_file_id(),
+                     file_source_id, false);
       }
     }
   }
@@ -24603,7 +24602,8 @@ tl_object_ptr<td_api::message> MessagesManager::get_message_object(DialogId dial
   auto edit_date = m->hide_edit_date ? 0 : m->edit_date;
   auto is_pinned = is_scheduled ? false : m->is_pinned;
   auto has_timestamped_media = for_event_log || reply_to_message_id == 0 || m->max_own_media_timestamp >= 0;
-  auto reply_markup = get_reply_markup_object(m->reply_markup);
+  auto reply_markup =
+      get_reply_markup_object(m->message_id.is_any_server() ? td_->contacts_manager_.get() : nullptr, m->reply_markup);
 
   auto live_location_date = m->is_failed_to_send ? 0 : m->date;
   auto skip_bot_commands = for_event_log ? true : need_skip_bot_commands(dialog_id, m);
@@ -25726,7 +25726,7 @@ void MessagesManager::on_message_media_uploaded(DialogId dialog_id, const Messag
   auto message_id = m->message_id;
   if (message_id.is_any_server()) {
     const FormattedText *caption = get_message_content_caption(m->edited_content.get());
-    auto input_reply_markup = get_input_reply_markup(m->edited_reply_markup);
+    auto input_reply_markup = get_input_reply_markup(td_->contacts_manager_.get(), m->edited_reply_markup);
     bool was_uploaded = FileManager::extract_was_uploaded(input_media);
     bool was_thumbnail_uploaded = FileManager::extract_was_thumbnail_uploaded(input_media);
 
@@ -25766,7 +25766,8 @@ void MessagesManager::on_message_media_uploaded(DialogId dialog_id, const Messag
           int64 random_id = begin_send_message(dialog_id, m);
           td_->create_handler<SendMediaQuery>()->send(
               file_id, thumbnail_file_id, get_message_flags(m), dialog_id, get_send_message_as_input_peer(m),
-              m->reply_to_message_id, get_message_schedule_date(m), get_input_reply_markup(m->reply_markup),
+              m->reply_to_message_id, get_message_schedule_date(m),
+              get_input_reply_markup(td_->contacts_manager_.get(), m->reply_markup),
               get_input_message_entities(td_->contacts_manager_.get(), caption, "on_message_media_uploaded"),
               caption == nullptr ? "" : caption->text, std::move(input_media), m->content->get_type(), m->is_copy,
               random_id, &m->send_query_ref);
@@ -26172,7 +26173,7 @@ void MessagesManager::on_text_message_ready_to_send(DialogId dialog_id, MessageI
     int64 random_id = begin_send_message(dialog_id, m);
     td_->create_handler<SendMessageQuery>()->send(
         get_message_flags(m), dialog_id, get_send_message_as_input_peer(m), m->reply_to_message_id,
-        get_message_schedule_date(m), get_input_reply_markup(m->reply_markup),
+        get_message_schedule_date(m), get_input_reply_markup(td_->contacts_manager_.get(), m->reply_markup),
         get_input_message_entities(td_->contacts_manager_.get(), message_text->entities, "do_send_message"),
         message_text->text, m->is_copy, random_id, &m->send_query_ref);
   }
@@ -26881,7 +26882,7 @@ void MessagesManager::edit_message_text(FullMessageId full_message_id,
   if (r_new_reply_markup.is_error()) {
     return promise.set_error(r_new_reply_markup.move_as_error());
   }
-  auto input_reply_markup = get_input_reply_markup(r_new_reply_markup.ok());
+  auto input_reply_markup = get_input_reply_markup(td_->contacts_manager_.get(), r_new_reply_markup.ok());
   int32 flags = 0;
   if (input_message_text.disable_web_page_preview) {
     flags |= SEND_MESSAGE_FLAG_DISABLE_WEB_PAGE_PREVIEW;
@@ -26937,7 +26938,7 @@ void MessagesManager::edit_message_live_location(FullMessageId full_message_id,
   if (r_new_reply_markup.is_error()) {
     return promise.set_error(r_new_reply_markup.move_as_error());
   }
-  auto input_reply_markup = get_input_reply_markup(r_new_reply_markup.ok());
+  auto input_reply_markup = get_input_reply_markup(td_->contacts_manager_.get(), r_new_reply_markup.ok());
 
   int32 flags = 0;
   if (location.empty()) {
@@ -27173,7 +27174,7 @@ void MessagesManager::edit_message_caption(FullMessageId full_message_id,
   if (r_new_reply_markup.is_error()) {
     return promise.set_error(r_new_reply_markup.move_as_error());
   }
-  auto input_reply_markup = get_input_reply_markup(r_new_reply_markup.ok());
+  auto input_reply_markup = get_input_reply_markup(td_->contacts_manager_.get(), r_new_reply_markup.ok());
 
   td_->create_handler<EditMessageQuery>(std::move(promise))
       ->send(1 << 11, dialog_id, m->message_id, caption.text,
@@ -27213,7 +27214,7 @@ void MessagesManager::edit_message_reply_markup(FullMessageId full_message_id,
   if (r_new_reply_markup.is_error()) {
     return promise.set_error(r_new_reply_markup.move_as_error());
   }
-  auto input_reply_markup = get_input_reply_markup(r_new_reply_markup.ok());
+  auto input_reply_markup = get_input_reply_markup(td_->contacts_manager_.get(), r_new_reply_markup.ok());
   td_->create_handler<EditMessageQuery>(std::move(promise))
       ->send(0, dialog_id, m->message_id, string(), vector<tl_object_ptr<telegram_api::MessageEntity>>(), nullptr,
              std::move(input_reply_markup), get_message_schedule_date(m));
@@ -27260,7 +27261,7 @@ void MessagesManager::edit_inline_message_text(const string &inline_message_id,
       ->send(flags, std::move(input_bot_inline_message_id), input_message_text.text.text,
              get_input_message_entities(td_->contacts_manager_.get(), input_message_text.text.entities,
                                         "edit_inline_message_text"),
-             nullptr, get_input_reply_markup(r_new_reply_markup.ok()));
+             nullptr, get_input_reply_markup(td_->contacts_manager_.get(), r_new_reply_markup.ok()));
 }
 
 void MessagesManager::edit_inline_message_live_location(const string &inline_message_id,
@@ -27298,7 +27299,7 @@ void MessagesManager::edit_inline_message_live_location(const string &inline_mes
       flags, false /*ignored*/, location.get_input_geo_point(), heading, 0, proximity_alert_radius);
   td_->create_handler<EditInlineMessageQuery>(std::move(promise))
       ->send(0, std::move(input_bot_inline_message_id), "", vector<tl_object_ptr<telegram_api::MessageEntity>>(),
-             std::move(input_media), get_input_reply_markup(r_new_reply_markup.ok()));
+             std::move(input_media), get_input_reply_markup(td_->contacts_manager_.get(), r_new_reply_markup.ok()));
 }
 
 void MessagesManager::edit_inline_message_media(const string &inline_message_id,
@@ -27350,7 +27351,7 @@ void MessagesManager::edit_inline_message_media(const string &inline_message_id,
   td_->create_handler<EditInlineMessageQuery>(std::move(promise))
       ->send(1 << 11, std::move(input_bot_inline_message_id), caption == nullptr ? "" : caption->text,
              get_input_message_entities(td_->contacts_manager_.get(), caption, "edit_inline_message_media"),
-             std::move(input_media), get_input_reply_markup(r_new_reply_markup.ok()));
+             std::move(input_media), get_input_reply_markup(td_->contacts_manager_.get(), r_new_reply_markup.ok()));
 }
 
 void MessagesManager::edit_inline_message_caption(const string &inline_message_id,
@@ -27381,7 +27382,7 @@ void MessagesManager::edit_inline_message_caption(const string &inline_message_i
   td_->create_handler<EditInlineMessageQuery>(std::move(promise))
       ->send(1 << 11, std::move(input_bot_inline_message_id), caption.text,
              get_input_message_entities(td_->contacts_manager_.get(), caption.entities, "edit_inline_message_caption"),
-             nullptr, get_input_reply_markup(r_new_reply_markup.ok()));
+             nullptr, get_input_reply_markup(td_->contacts_manager_.get(), r_new_reply_markup.ok()));
 }
 
 void MessagesManager::edit_inline_message_reply_markup(const string &inline_message_id,
@@ -27403,7 +27404,7 @@ void MessagesManager::edit_inline_message_reply_markup(const string &inline_mess
 
   td_->create_handler<EditInlineMessageQuery>(std::move(promise))
       ->send(0, std::move(input_bot_inline_message_id), string(), vector<tl_object_ptr<telegram_api::MessageEntity>>(),
-             nullptr, get_input_reply_markup(r_new_reply_markup.ok()));
+             nullptr, get_input_reply_markup(td_->contacts_manager_.get(), r_new_reply_markup.ok()));
 }
 
 void MessagesManager::edit_message_scheduling_state(
@@ -27917,8 +27918,8 @@ class MessagesManager::ForwardMessagesLogEvent {
   DialogId from_dialog_id;
   vector<MessageId> message_ids;
   vector<Message *> messages_in;
-  bool drop_author;
-  bool drop_media_captions;
+  bool drop_author = false;
+  bool drop_media_captions = false;
   vector<unique_ptr<Message>> messages_out;
 
   template <class StorerT>
@@ -30392,8 +30393,9 @@ void MessagesManager::send_update_message_edited(DialogId dialog_id, const Messa
   cancel_dialog_action(dialog_id, m);
   auto edit_date = m->hide_edit_date ? 0 : m->edit_date;
   send_closure(G()->td(), &Td::send_update,
-               make_tl_object<td_api::updateMessageEdited>(dialog_id.get(), m->message_id.get(), edit_date,
-                                                           get_reply_markup_object(m->reply_markup)));
+               make_tl_object<td_api::updateMessageEdited>(
+                   dialog_id.get(), m->message_id.get(), edit_date,
+                   get_reply_markup_object(td_->contacts_manager_.get(), m->reply_markup)));
 }
 
 void MessagesManager::send_update_message_interaction_info(DialogId dialog_id, const Message *m) const {
@@ -32971,6 +32973,7 @@ void MessagesManager::send_dialog_action(DialogId dialog_id, MessageId top_threa
     }
 
     if (is_dialog_action_unneeded(dialog_id)) {
+      LOG(INFO) << "Skip unneeded " << action << " in " << dialog_id;
       return promise.set_value(Unit());
     }
 
@@ -35241,7 +35244,7 @@ bool MessagesManager::need_delete_file(FullMessageId full_message_id, FileId fil
     return false;
   }
 
-  auto main_file_id = td_->file_manager_->get_file_view(file_id).file_id();
+  auto main_file_id = td_->file_manager_->get_file_view(file_id).get_main_file_id();
   auto full_message_ids = td_->file_reference_manager_->get_some_message_file_sources(main_file_id);
   LOG(INFO) << "Receive " << full_message_ids << " as sources for file " << main_file_id << "/" << file_id << " from "
             << full_message_id;
@@ -36008,7 +36011,7 @@ bool MessagesManager::update_message_content(DialogId dialog_id, Message *old_me
         auto search_text = get_message_search_text(old_message);
         for (auto file_id : file_ids) {
           auto file_view = td_->file_manager_->get_file_view(file_id);
-          send_closure(td_->download_manager_actor_, &DownloadManager::change_search_text, file_view.file_id(),
+          send_closure(td_->download_manager_actor_, &DownloadManager::change_search_text, file_view.get_main_file_id(),
                        file_source_id, search_text);
         }
       }
@@ -40087,12 +40090,12 @@ void MessagesManager::add_message_file_to_downloads(FullMessageId full_message_i
   if (file_view.empty()) {
     return promise.set_error(Status::Error(400, "File not found"));
   }
-  file_id = file_view.file_id();
+  file_id = file_view.get_main_file_id();
   bool is_found = false;
   for (auto message_file_id : get_message_file_ids(m)) {
     auto message_file_view = td_->file_manager_->get_file_view(message_file_id);
     CHECK(!message_file_view.empty());
-    if (message_file_view.file_id() == file_id) {
+    if (message_file_view.get_main_file_id() == file_id) {
       is_found = true;
     }
   }

@@ -27,8 +27,6 @@
 
 #include "td/db/SqliteKeyValueAsync.h"
 
-#include "td/actor/PromiseFuture.h"
-
 #include "td/utils/algorithm.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
@@ -717,7 +715,7 @@ void AnimationsManager::add_saved_animation_impl(FileId animation_id, bool add_o
     return promise.set_error(Status::Error(400, "Animation file not found"));
   }
 
-  LOG(INFO) << "Add saved animation " << animation_id << " with main file " << file_view.file_id();
+  LOG(INFO) << "Add saved animation " << animation_id << " with main file " << file_view.get_main_file_id();
   if (!are_saved_animations_loaded_) {
     load_saved_animations(
         PromiseCreator::lambda([animation_id, add_on_server, promise = std::move(promise)](Result<> result) mutable {
@@ -798,7 +796,11 @@ void AnimationsManager::remove_saved_animation(const tl_object_ptr<td_api::Input
   }
 
   FileId file_id = r_file_id.ok();
-  if (!td::remove(saved_animation_ids_, file_id)) {
+  auto is_equal = [animation_id = file_id](FileId file_id) {
+    return file_id == animation_id ||
+           (file_id.get_remote() == animation_id.get_remote() && animation_id.get_remote() != 0);
+  };
+  if (!td::remove_if(saved_animation_ids_, is_equal)) {
     return promise.set_value(Unit());
   }
 

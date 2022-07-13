@@ -41,8 +41,6 @@
 #include "td/db/SqliteKeyValue.h"
 #include "td/db/SqliteKeyValueAsync.h"
 
-#include "td/actor/MultiPromise.h"
-#include "td/actor/PromiseFuture.h"
 #include "td/actor/SleepActor.h"
 
 #include "td/utils/algorithm.h"
@@ -2758,6 +2756,12 @@ bool StickersManager::has_input_media(FileId sticker_file_id, bool is_secret) co
       return false;
     }
     if (td_->auth_manager_->is_bot() && file_view.has_remote_location()) {
+      return true;
+    }
+    const Sticker *sticker = get_sticker(sticker_file_id);
+    CHECK(sticker != nullptr);
+    if (sticker->set_id.is_valid()) {
+      // stickers within a set doesn't need to be duped
       return true;
     }
     // having remote location is not enough to have InputMedia, because the file may not have valid file_reference
@@ -7232,7 +7236,10 @@ void StickersManager::remove_favorite_sticker(const tl_object_ptr<td_api::InputF
   }
 
   FileId file_id = r_file_id.ok();
-  if (!td::remove(favorite_sticker_ids_, file_id)) {
+  auto is_equal = [sticker_id = file_id](FileId file_id) {
+    return file_id == sticker_id || (file_id.get_remote() == sticker_id.get_remote() && sticker_id.get_remote() != 0);
+  };
+  if (!td::remove_if(favorite_sticker_ids_, is_equal)) {
     return promise.set_value(Unit());
   }
 
