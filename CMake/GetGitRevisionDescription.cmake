@@ -58,21 +58,25 @@ endfunction()
 function(get_git_head_revision _refspecvar _hashvar)
   _git_find_closest_git_dir("${CMAKE_CURRENT_SOURCE_DIR}" GIT_DIR)
 
-  file(RELATIVE_PATH _relative_to_source_dir "${CMAKE_CURRENT_SOURCE_DIR}" "${GIT_DIR}")
-  if ("${_relative_to_source_dir}" MATCHES "^[.][.]")
-    # We've gone above the CMake root dir.
-    set(GIT_DIR "")
+  if (NOT GIT_DIR STREQUAL "")
+    file(RELATIVE_PATH _relative_to_source_dir "${CMAKE_CURRENT_SOURCE_DIR}" "${GIT_DIR}")
+    if (_relative_to_source_dir MATCHES "^[.][.]")
+      # We've gone above the CMake root dir.
+      set(GIT_DIR "")
+    endif()
   endif()
-  if ("${GIT_DIR}" STREQUAL "")
+  if (GIT_DIR STREQUAL "")
     set(${_refspecvar} "GITDIR-NOTFOUND" PARENT_SCOPE)
     set(${_hashvar} "GITDIR-NOTFOUND" PARENT_SCOPE)
     return()
   endif()
 
+  find_package(Git)
+
   # Check if the current source dir is a git submodule or a worktree.
   # In both cases .git is a file instead of a directory.
   #
-  if (NOT IS_DIRECTORY ${GIT_DIR})
+  if ((NOT IS_DIRECTORY ${GIT_DIR}) AND Git_FOUND)
     # The following git command will return a non empty string that
     # points to the super project working tree if the current
     # source dir is inside a git submodule.
@@ -83,7 +87,7 @@ function(get_git_head_revision _refspecvar _hashvar)
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
       OUTPUT_VARIABLE out
       ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if (NOT "${out}" STREQUAL "")
+    if (NOT out STREQUAL "")
       # If out is non-empty, GIT_DIR/CMAKE_CURRENT_SOURCE_DIR is in a submodule
       file(READ ${GIT_DIR} submodule)
       string(REGEX REPLACE "gitdir: (.*)$" "\\1" GIT_DIR_RELATIVE ${submodule})

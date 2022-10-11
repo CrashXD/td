@@ -52,6 +52,9 @@ class LinkManager final : public Actor {
   // same as check_link, but returns an empty string instead of an error
   static string get_checked_link(Slice link, bool http_only = false, bool https_only = false);
 
+  // returns whether a link is an internal link, supported or not
+  static bool is_internal_link(Slice link);
+
   // checks whether the link is a supported tg or t.me link and parses it
   static unique_ptr<InternalLink> parse_internal_link(Slice link, bool is_trusted = false);
 
@@ -77,6 +80,8 @@ class LinkManager final : public Actor {
 
   static UserId get_link_user_id(Slice url);
 
+  static Result<int64> get_link_custom_emoji_document_id(Slice url);
+
   static Result<MessageLinkInfo> get_message_link_info(Slice url);
 
  private:
@@ -96,6 +101,7 @@ class LinkManager final : public Actor {
   class InternalLinkDialogInvite;
   class InternalLinkFilterSettings;
   class InternalLinkGame;
+  class InternalLinkInstantView;
   class InternalLinkInvoice;
   class InternalLinkLanguage;
   class InternalLinkLanguageSettings;
@@ -107,6 +113,7 @@ class LinkManager final : public Actor {
   class InternalLinkProxy;
   class InternalLinkPublicDialog;
   class InternalLinkQrCodeAuthentication;
+  class InternalLinkRestorePurchases;
   class InternalLinkSettings;
   class InternalLinkStickerSet;
   class InternalLinkTheme;
@@ -116,9 +123,10 @@ class LinkManager final : public Actor {
   class InternalLinkUserPhoneNumber;
   class InternalLinkVoiceChat;
 
+  enum class LinkType : int32 { External, TMe, Tg, Telegraph };
+
   struct LinkInfo {
-    bool is_internal_ = false;
-    bool is_tg_ = false;
+    LinkType type_ = LinkType::External;
     string query_;
   };
   // returns information about the link

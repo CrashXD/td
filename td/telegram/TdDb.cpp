@@ -117,6 +117,9 @@ Status init_binlog(Binlog &binlog, string path, BinlogKeyValue<Binlog> &binlog_p
       case LogEvent::HandlerType::EditMessagePushNotification:
         events.to_notification_manager.push_back(event.clone());
         break;
+      case LogEvent::HandlerType::SaveAppLog:
+        events.save_app_log_events.push_back(event.clone());
+        break;
       case LogEvent::HandlerType::BinlogPmcMagic:
         binlog_pmc.external_init_handle(event);
         break;
@@ -285,7 +288,7 @@ Status TdDb::init_sqlite(const TdParameters &parameters, const DbKey &key, const
   bool use_dialog_db = parameters.use_message_db;
   bool use_message_db = parameters.use_message_db;
   if (!use_sqlite) {
-    unlink(sql_database_path).ignore();
+    SqliteDb::destroy(sql_database_path).ignore();
     return Status::OK();
   }
 
@@ -382,7 +385,11 @@ void TdDb::open(int32 scheduler_id, TdParameters parameters, DbKey key, Promise<
 }
 
 void TdDb::open_impl(TdParameters parameters, DbKey key, Promise<OpenedDatabase> &&promise) {
+  TRY_STATUS_PROMISE(promise, check_parameters(parameters));
+
   OpenedDatabase result;
+  result.database_directory = parameters.database_directory;
+  result.files_directory = parameters.files_directory;
 
   // Init pmc
   Binlog *binlog_ptr = nullptr;
@@ -403,6 +410,11 @@ void TdDb::open_impl(TdParameters parameters, DbKey key, Promise<OpenedDatabase>
   VLOG(td_init) << "Finish initialization of binlog PMC";
   config_pmc->external_init_finish(binlog);
   VLOG(td_init) << "Finish initialization of config PMC";
+
+  if (parameters.use_file_db && binlog_pmc->get("auth").empty()) {
+    LOG(INFO) << "Destroy SQLite database, because wasn't authorized yet";
+    SqliteDb::destroy(get_sqlite_path(parameters)).ignore();
+  }
 
   DbKey new_sqlite_key;
   DbKey old_sqlite_key;
@@ -475,16 +487,7 @@ void TdDb::open_impl(TdParameters parameters, DbKey key, Promise<OpenedDatabase>
 TdDb::TdDb() = default;
 TdDb::~TdDb() = default;
 
-void TdDb::check_parameters(int32 scheduler_id, TdParameters parameters, Promise<CheckedParameters> promise) {
-  Scheduler::instance()->run_on_scheduler(
-      scheduler_id, [parameters = std::move(parameters), promise = std::move(promise)](Unit) mutable {
-        TdDb::check_parameters_impl(std::move(parameters), std::move(promise));
-      });
-}
-
-void TdDb::check_parameters_impl(TdParameters parameters, Promise<CheckedParameters> promise) {
-  CheckedParameters result;
-
+Status TdDb::check_parameters(TdParameters &parameters) {
   auto prepare_dir = [](string dir) -> Result<string> {
     CHECK(!dir.empty());
     if (dir.back() != TD_DIR_SLASH) {
@@ -501,31 +504,20 @@ void TdDb::check_parameters_impl(TdParameters parameters, Promise<CheckedParamet
   auto r_database_directory = prepare_dir(parameters.database_directory);
   if (r_database_directory.is_error()) {
     VLOG(td_init) << "Invalid database_directory";
-    return promise.set_error(Status::Error(PSLICE()
-                                           << "Can't init database in the directory \"" << parameters.database_directory
-                                           << "\": " << r_database_directory.error()));
+    return Status::Error(PSLICE() << "Can't init database in the directory \"" << parameters.database_directory
+                                  << "\": " << r_database_directory.error());
   }
-  result.database_directory = r_database_directory.move_as_ok();
-  parameters.database_directory = result.database_directory;
+  parameters.database_directory = r_database_directory.move_as_ok();
 
   auto r_files_directory = prepare_dir(parameters.files_directory);
   if (r_files_directory.is_error()) {
     VLOG(td_init) << "Invalid files_directory";
-    return promise.set_error(Status::Error(PSLICE() << "Can't init files directory \"" << parameters.files_directory
-                                                    << "\": " << r_files_directory.error()));
+    return Status::Error(PSLICE() << "Can't init files directory \"" << parameters.files_directory
+                                  << "\": " << r_files_directory.error());
   }
-  result.files_directory = r_files_directory.move_as_ok();
+  parameters.files_directory = r_files_directory.move_as_ok();
 
-  Binlog binlog;
-  auto status = binlog.init(get_binlog_path(parameters), Binlog::Callback());
-  if (status.is_error() && status.code() != Binlog::Error::WrongPassword) {
-    LOG(WARNING) << "Failed to check binlog: " << status;
-    return promise.set_error(std::move(status));
-  }
-  result.is_database_encrypted = binlog.get_info().wrong_password;
-  binlog.close(false /*need_sync*/).ensure();
-
-  promise.set_value(std::move(result));
+  return Status::OK();
 }
 
 void TdDb::change_key(DbKey key, Promise<> promise) {

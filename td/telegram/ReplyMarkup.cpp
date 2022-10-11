@@ -221,13 +221,14 @@ static KeyboardButton get_keyboard_button(tl_object_ptr<telegram_api::KeyboardBu
     }
     case telegram_api::keyboardButtonSimpleWebView::ID: {
       auto keyboard_button = move_tl_object_as<telegram_api::keyboardButtonSimpleWebView>(keyboard_button_ptr);
-      button.type = KeyboardButton::Type::WebView;
-      button.text = std::move(keyboard_button->text_);
       auto r_url = LinkManager::check_link(keyboard_button->url_);
       if (r_url.is_error()) {
         LOG(ERROR) << "Keyboard Web App " << r_url.error().message();
-        return {};
+        break;
       }
+
+      button.type = KeyboardButton::Type::WebView;
+      button.text = std::move(keyboard_button->text_);
       button.url = r_url.move_as_ok();
       break;
     }
@@ -245,13 +246,13 @@ static InlineKeyboardButton get_inline_keyboard_button(
   switch (keyboard_button_ptr->get_id()) {
     case telegram_api::keyboardButtonUrl::ID: {
       auto keyboard_button = move_tl_object_as<telegram_api::keyboardButtonUrl>(keyboard_button_ptr);
-      button.type = InlineKeyboardButton::Type::Url;
-      button.text = std::move(keyboard_button->text_);
       auto r_url = LinkManager::check_link(keyboard_button->url_);
       if (r_url.is_error()) {
         LOG(ERROR) << "Inline keyboard " << r_url.error().message();
-        return {};
+        break;
       }
+      button.type = InlineKeyboardButton::Type::Url;
+      button.text = std::move(keyboard_button->text_);
       button.data = r_url.move_as_ok();
       break;
     }
@@ -286,38 +287,39 @@ static InlineKeyboardButton get_inline_keyboard_button(
     }
     case telegram_api::keyboardButtonUrlAuth::ID: {
       auto keyboard_button = move_tl_object_as<telegram_api::keyboardButtonUrlAuth>(keyboard_button_ptr);
+      auto r_url = LinkManager::check_link(keyboard_button->url_);
+      if (r_url.is_error()) {
+        LOG(ERROR) << "Inline keyboard Login " << r_url.error().message();
+        break;
+      }
       button.type = InlineKeyboardButton::Type::UrlAuth;
       button.id = keyboard_button->button_id_;
       button.text = std::move(keyboard_button->text_);
       button.forward_text = std::move(keyboard_button->fwd_text_);
-      auto r_url = LinkManager::check_link(keyboard_button->url_);
-      if (r_url.is_error()) {
-        LOG(ERROR) << "Inline keyboard Login " << r_url.error().message();
-        return {};
-      }
       button.data = r_url.move_as_ok();
       break;
     }
     case telegram_api::keyboardButtonUserProfile::ID: {
       auto keyboard_button = move_tl_object_as<telegram_api::keyboardButtonUserProfile>(keyboard_button_ptr);
+      auto user_id = UserId(keyboard_button->user_id_);
+      if (!user_id.is_valid()) {
+        LOG(ERROR) << "Receive " << user_id << " in inline keyboard";
+        break;
+      }
       button.type = InlineKeyboardButton::Type::User;
       button.text = std::move(keyboard_button->text_);
-      button.user_id = UserId(keyboard_button->user_id_);
-      if (!button.user_id.is_valid()) {
-        LOG(ERROR) << "Receive " << button.user_id << " in inline keyboard";
-        return {};
-      }
+      button.user_id = user_id;
       break;
     }
     case telegram_api::keyboardButtonWebView::ID: {
       auto keyboard_button = move_tl_object_as<telegram_api::keyboardButtonWebView>(keyboard_button_ptr);
-      button.type = InlineKeyboardButton::Type::WebView;
-      button.text = std::move(keyboard_button->text_);
       auto r_url = LinkManager::check_link(keyboard_button->url_);
       if (r_url.is_error()) {
         LOG(ERROR) << "Inline keyboard Web App " << r_url.error().message();
-        return {};
+        break;
       }
+      button.type = InlineKeyboardButton::Type::WebView;
+      button.text = std::move(keyboard_button->text_);
       button.data = r_url.move_as_ok();
       break;
     }
@@ -498,7 +500,7 @@ static Result<InlineKeyboardButton> get_inline_keyboard_button(tl_object_ptr<td_
   current_button.text = std::move(button->text_);
 
   if (button->type_ == nullptr) {
-    return Status::Error(400, "Inline keyboard button type can't be empty");
+    return Status::Error(400, "Inline keyboard button type must be non-empty");
   }
 
   int32 button_type_id = button->type_->get_id();
@@ -920,9 +922,10 @@ static tl_object_ptr<td_api::inlineKeyboardButton> get_inline_keyboard_button_ob
       type = make_tl_object<td_api::inlineKeyboardButtonTypeCallbackWithPassword>(keyboard_button.data);
       break;
     case InlineKeyboardButton::Type::User: {
-      auto user_id = contacts_manager == nullptr ? keyboard_button.user_id.get()
-                                                 : contacts_manager->get_user_id_object(
-                                                       keyboard_button.user_id, "get_inline_keyboard_button_object");
+      bool need_user = contacts_manager != nullptr && !contacts_manager->is_user_bot(contacts_manager->get_my_id());
+      auto user_id =
+          need_user ? contacts_manager->get_user_id_object(keyboard_button.user_id, "get_inline_keyboard_button_object")
+                    : keyboard_button.user_id.get();
       type = make_tl_object<td_api::inlineKeyboardButtonTypeUser>(user_id);
       break;
     }

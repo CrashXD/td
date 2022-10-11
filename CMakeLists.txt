@@ -6,7 +6,7 @@ if (POLICY CMP0065)
   cmake_policy(SET CMP0065 NEW)
 endif()
 
-project(TDLib VERSION 1.8.4 LANGUAGES CXX C)
+project(TDLib VERSION 1.8.6 LANGUAGES CXX C)
 
 if (NOT DEFINED CMAKE_MODULE_PATH)
   set(CMAKE_MODULE_PATH "")
@@ -289,7 +289,6 @@ set(TDLIB_SOURCE
   td/telegram/AudiosManager.cpp
   td/telegram/AuthManager.cpp
   td/telegram/AutoDownloadSettings.cpp
-  td/telegram/AvailableReaction.cpp
   td/telegram/BackgroundManager.cpp
   td/telegram/BackgroundType.cpp
   td/telegram/BotCommand.cpp
@@ -301,9 +300,9 @@ set(TDLIB_SOURCE
   td/telegram/CallManager.cpp
   td/telegram/CallbackQueriesManager.cpp
   td/telegram/ChannelParticipantFilter.cpp
+  td/telegram/ChatReactions.cpp
   td/telegram/ClientActor.cpp
   td/telegram/ConfigManager.cpp
-  td/telegram/ConfigShared.cpp
   td/telegram/ConnectionState.cpp
   td/telegram/Contact.cpp
   td/telegram/ContactsManager.cpp
@@ -330,6 +329,8 @@ set(TDLIB_SOURCE
   td/telegram/DownloadManager.cpp
   td/telegram/DownloadManagerCallback.cpp
   td/telegram/DraftMessage.cpp
+  td/telegram/EmailVerification.cpp
+  td/telegram/EmojiStatus.cpp
   td/telegram/FileReferenceManager.cpp
   td/telegram/files/FileBitmask.cpp
   td/telegram/files/FileDb.cpp
@@ -414,6 +415,7 @@ set(TDLIB_SOURCE
   td/telegram/PhotoSizeSource.cpp
   td/telegram/PollManager.cpp
   td/telegram/Premium.cpp
+  td/telegram/PremiumGiftOption.cpp
   td/telegram/QueryCombiner.cpp
   td/telegram/RecentDialogList.cpp
   td/telegram/ReplyMarkup.cpp
@@ -427,14 +429,17 @@ set(TDLIB_SOURCE
   td/telegram/SecureStorage.cpp
   td/telegram/SecureValue.cpp
   td/telegram/SendCodeHelper.cpp
+  td/telegram/SentEmailCode.cpp
   td/telegram/SequenceDispatcher.cpp
   td/telegram/SpecialStickerSetType.cpp
   td/telegram/SponsoredMessageManager.cpp
   td/telegram/StateManager.cpp
   td/telegram/StickerFormat.cpp
   td/telegram/StickersManager.cpp
+  td/telegram/StickerType.cpp
   td/telegram/StorageManager.cpp
   td/telegram/SuggestedAction.cpp
+  td/telegram/Support.cpp
   td/telegram/Td.cpp
   td/telegram/TdDb.cpp
   td/telegram/TermsOfService.cpp
@@ -487,7 +492,6 @@ set(TDLIB_SOURCE
   td/telegram/AudiosManager.h
   td/telegram/AuthManager.h
   td/telegram/AutoDownloadSettings.h
-  td/telegram/AvailableReaction.h
   td/telegram/BackgroundId.h
   td/telegram/BackgroundManager.h
   td/telegram/BackgroundType.h
@@ -503,9 +507,9 @@ set(TDLIB_SOURCE
   td/telegram/ChannelParticipantFilter.h
   td/telegram/ChannelType.h
   td/telegram/ChatId.h
+  td/telegram/ChatReactions.h
   td/telegram/ClientActor.h
   td/telegram/ConfigManager.h
-  td/telegram/ConfigShared.h
   td/telegram/ConnectionState.h
   td/telegram/Contact.h
   td/telegram/ContactsManager.h
@@ -536,6 +540,8 @@ set(TDLIB_SOURCE
   td/telegram/DownloadManager.h
   td/telegram/DownloadManagerCallback.h
   td/telegram/DraftMessage.h
+  td/telegram/EmailVerification.h
+  td/telegram/EmojiStatus.h
   td/telegram/EncryptedFile.h
   td/telegram/FileReferenceManager.h
   td/telegram/files/FileBitmask.h
@@ -650,6 +656,7 @@ set(TDLIB_SOURCE
   td/telegram/PollId.h
   td/telegram/PollManager.h
   td/telegram/Premium.h
+  td/telegram/PremiumGiftOption.h
   td/telegram/PrivacyManager.h
   td/telegram/PtsManager.h
   td/telegram/PublicDialogType.h
@@ -670,6 +677,7 @@ set(TDLIB_SOURCE
   td/telegram/SecureStorage.h
   td/telegram/SecureValue.h
   td/telegram/SendCodeHelper.h
+  td/telegram/SentEmailCode.h
   td/telegram/SequenceDispatcher.h
   td/telegram/ServerMessageId.h
   td/telegram/SetWithPosition.h
@@ -679,8 +687,10 @@ set(TDLIB_SOURCE
   td/telegram/StickerFormat.h
   td/telegram/StickerSetId.h
   td/telegram/StickersManager.h
+  td/telegram/StickerType.h
   td/telegram/StorageManager.h
   td/telegram/SuggestedAction.h
+  td/telegram/Support.h
   td/telegram/Td.h
   td/telegram/TdCallback.h
   td/telegram/TdDb.h
@@ -729,6 +739,7 @@ set(TDLIB_SOURCE
   td/telegram/PhotoSizeSource.hpp
   td/telegram/PollId.hpp
   td/telegram/PollManager.hpp
+  td/telegram/PremiumGiftOption.hpp
   td/telegram/ReplyMarkup.hpp
   td/telegram/SecureValue.hpp
   td/telegram/SendCodeHelper.hpp

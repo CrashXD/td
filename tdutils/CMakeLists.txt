@@ -138,6 +138,7 @@ set(TDUTILS_SOURCE
   td/utils/port/IPAddress.h
   td/utils/port/IoSlice.h
   td/utils/port/MemoryMapping.h
+  td/utils/port/Mutex.h
   td/utils/port/path.h
   td/utils/port/platform.h
   td/utils/port/Poll.h
@@ -293,6 +294,8 @@ set(TDUTILS_SOURCE
   td/utils/Variant.h
   td/utils/VectorQueue.h
   td/utils/WaitFreeHashMap.h
+  td/utils/WaitFreeHashSet.h
+  td/utils/WaitFreeVector.h
 )
 
 if (TDUTILS_MIME_TYPE)
@@ -334,6 +337,8 @@ set(TDUTILS_TEST_SOURCE
   ${CMAKE_CURRENT_SOURCE_DIR}/test/StealingQueue.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/variant.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/WaitFreeHashMap.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/WaitFreeHashSet.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/WaitFreeVector.cpp
   PARENT_SCOPE
 )
 
@@ -394,7 +399,8 @@ if (ANDROID)
 endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "NetBSD")
-  target_link_libraries(tdutils PUBLIC /usr/pkg/gcc5/i486--netbsdelf/lib/libatomic.so)
+  target_link_directories(tdutils PUBLIC /usr/pkg/gcc12/x86_64--netbsd/lib /usr/pkg/gcc12/i486--netbsdelf/lib)
+  target_link_libraries(tdutils PUBLIC atomic)
 endif()
 
 install(TARGETS tdutils EXPORT TdTargets

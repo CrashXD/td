@@ -10,12 +10,18 @@
 #include "td/telegram/Dependencies.h"
 #include "td/telegram/LinkManager.h"
 #include "td/telegram/misc.h"
+#include "td/telegram/OptionManager.h"
 #include "td/telegram/SecretChatLayer.h"
+#include "td/telegram/StickersManager.h"
+#include "td/telegram/Td.h"
+
+#include "td/actor/MultiPromise.h"
 
 #include "td/utils/algorithm.h"
 #include "td/utils/format.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
+#include "td/utils/Promise.h"
 #include "td/utils/SliceBuilder.h"
 #include "td/utils/unicode.h"
 #include "td/utils/utf8.h"
@@ -29,12 +35,27 @@
 namespace td {
 
 int MessageEntity::get_type_priority(Type type) {
-  static const int priorities[] = {
-      50 /*Mention*/,      50 /*Hashtag*/,        50 /*BotCommand*/,     50 /*Url*/,
-      50 /*EmailAddress*/, 90 /*Bold*/,           91 /*Italic*/,         20 /*Code*/,
-      11 /*Pre*/,          10 /*PreCode*/,        49 /*TextUrl*/,        49 /*MentionName*/,
-      50 /*Cashtag*/,      50 /*PhoneNumber*/,    92 /*Underline*/,      93 /*Strikethrough*/,
-      0 /*BlockQuote*/,    50 /*BankCardNumber*/, 50 /*MediaTimestamp*/, 94 /*Spoiler*/};
+  static const int priorities[] = {50 /*Mention*/,
+                                   50 /*Hashtag*/,
+                                   50 /*BotCommand*/,
+                                   50 /*Url*/,
+                                   50 /*EmailAddress*/,
+                                   90 /*Bold*/,
+                                   91 /*Italic*/,
+                                   20 /*Code*/,
+                                   11 /*Pre*/,
+                                   10 /*PreCode*/,
+                                   49 /*TextUrl*/,
+                                   49 /*MentionName*/,
+                                   50 /*Cashtag*/,
+                                   50 /*PhoneNumber*/,
+                                   92 /*Underline*/,
+                                   93 /*Strikethrough*/,
+                                   0 /*BlockQuote*/,
+                                   50 /*BankCardNumber*/,
+                                   50 /*MediaTimestamp*/,
+                                   94 /*Spoiler*/,
+                                   99 /*CustomEmoji*/};
   static_assert(sizeof(priorities) / sizeof(priorities[0]) == static_cast<size_t>(MessageEntity::Type::Size), "");
   return priorities[static_cast<int32>(type)];
 }
@@ -81,6 +102,8 @@ StringBuilder &operator<<(StringBuilder &string_builder, const MessageEntity::Ty
       return string_builder << "MediaTimestamp";
     case MessageEntity::Type::Spoiler:
       return string_builder << "Spoiler";
+    case MessageEntity::Type::CustomEmoji:
+      return string_builder << "CustomEmoji";
     default:
       UNREACHABLE();
       return string_builder << "Impossible";
@@ -98,6 +121,9 @@ StringBuilder &operator<<(StringBuilder &string_builder, const MessageEntity &me
   }
   if (message_entity.user_id.is_valid()) {
     string_builder << ", " << message_entity.user_id;
+  }
+  if (message_entity.document_id != 0) {
+    string_builder << ", emoji = " << message_entity.document_id;
   }
   string_builder << ']';
   return string_builder;
@@ -146,6 +172,8 @@ tl_object_ptr<td_api::TextEntityType> MessageEntity::get_text_entity_type_object
       return make_tl_object<td_api::textEntityTypeMediaTimestamp>(media_timestamp);
     case MessageEntity::Type::Spoiler:
       return make_tl_object<td_api::textEntityTypeSpoiler>();
+    case MessageEntity::Type::CustomEmoji:
+      return make_tl_object<td_api::textEntityTypeCustomEmoji>(document_id);
     default:
       UNREACHABLE();
       return nullptr;
@@ -234,7 +262,7 @@ static vector<Slice> match_mentions(Slice str) {
 
     if (ptr != begin) {
       uint32 prev;
-      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev, "match_mentions");
+      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev);
 
       if (is_word_character(prev)) {
         ptr++;
@@ -252,7 +280,7 @@ static vector<Slice> match_mentions(Slice str) {
     }
     uint32 next = 0;
     if (ptr != end) {
-      next_utf8_unsafe(ptr, &next, "match_mentions 2");
+      next_utf8_unsafe(ptr, &next);
     }
     if (is_word_character(next)) {
       continue;
@@ -278,7 +306,7 @@ static vector<Slice> match_bot_commands(Slice str) {
 
     if (ptr != begin) {
       uint32 prev;
-      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev, "match_bot_commands");
+      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev);
 
       if (is_word_character(prev) || prev == '/' || prev == '<' || prev == '>') {
         ptr++;
@@ -311,7 +339,7 @@ static vector<Slice> match_bot_commands(Slice str) {
 
     uint32 next = 0;
     if (ptr != end) {
-      next_utf8_unsafe(ptr, &next, "match_bot_commands 2");
+      next_utf8_unsafe(ptr, &next);
     }
     if (is_word_character(next) || next == '/' || next == '<' || next == '>') {
       continue;
@@ -323,7 +351,7 @@ static vector<Slice> match_bot_commands(Slice str) {
 
 static bool is_hashtag_letter(uint32 c, UnicodeSimpleCategory &category) {
   category = get_unicode_simple_category(c);
-  if (c == '_' || c == 0x200c || c == 0xb7) {
+  if (c == '_' || c == 0x200c || c == 0xb7 || (0xd80 <= c && c <= 0xdff)) {
     return true;
   }
   switch (category) {
@@ -341,7 +369,7 @@ static vector<Slice> match_hashtags(Slice str) {
   const unsigned char *end = str.uend();
   const unsigned char *ptr = begin;
 
-  // '/(?<=^|[^\d_\pL\x{200c}])#([\d_\pL\x{200c}]{1,256})(?![\d_\pL\x{200c}]*#)/u'
+  // '/(?<=^|[^\d_\pL\x{200c}\x{0d80}-\x{0dff}])#([\d_\pL\x{200c}\x{0d80}-\x{0dff}]{1,256})(?![\d_\pL\x{200c}\x{0d80}-\x{0dff}]*#)/u'
   // and at least one letter
 
   UnicodeSimpleCategory category;
@@ -354,7 +382,7 @@ static vector<Slice> match_hashtags(Slice str) {
 
     if (ptr != begin) {
       uint32 prev;
-      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev, "match_hashtags");
+      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev);
 
       if (is_hashtag_letter(prev, category)) {
         ptr++;
@@ -367,7 +395,7 @@ static vector<Slice> match_hashtags(Slice str) {
     bool was_letter = false;
     while (ptr != end) {
       uint32 code;
-      auto next_ptr = next_utf8_unsafe(ptr, &code, "match_hashtags 2");
+      auto next_ptr = next_utf8_unsafe(ptr, &code);
       if (!is_hashtag_letter(code, category)) {
         break;
       }
@@ -404,7 +432,7 @@ static vector<Slice> match_cashtags(Slice str) {
   const unsigned char *end = str.uend();
   const unsigned char *ptr = begin;
 
-  // '/(?<=^|[^$\d_\pL\x{200c}])\$(1INCH|[A-Z]{1,8})(?![$\d_\pL\x{200c}])/u'
+  // '/(?<=^|[^$\d_\pL\x{200c}\x{0d80}-\x{0dff}])\$(1INCH|[A-Z]{1,8})(?![$\d_\pL\x{200c}\x{0d80}-\x{0dff}])/u'
 
   UnicodeSimpleCategory category;
   while (true) {
@@ -415,7 +443,7 @@ static vector<Slice> match_cashtags(Slice str) {
 
     if (ptr != begin) {
       uint32 prev;
-      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev, "match_cashtags");
+      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev);
 
       if (is_hashtag_letter(prev, category) || prev == '$') {
         ptr++;
@@ -439,7 +467,7 @@ static vector<Slice> match_cashtags(Slice str) {
 
     if (cashtag_end != end) {
       uint32 code;
-      next_utf8_unsafe(ptr, &code, "match_cashtags 2");
+      next_utf8_unsafe(ptr, &code);
       if (is_hashtag_letter(code, category) || code == '$') {
         continue;
       }
@@ -478,7 +506,7 @@ static vector<Slice> match_media_timestamps(Slice str) {
 
       if (media_timestamp_begin != begin) {
         uint32 prev;
-        next_utf8_unsafe(prev_utf8_unsafe(media_timestamp_begin), &prev, "match_media_timestamps 1");
+        next_utf8_unsafe(prev_utf8_unsafe(media_timestamp_begin), &prev);
 
         if (is_word_character(prev)) {
           continue;
@@ -486,7 +514,7 @@ static vector<Slice> match_media_timestamps(Slice str) {
       }
       if (media_timestamp_end != end) {
         uint32 next;
-        next_utf8_unsafe(media_timestamp_end, &next, "match_media_timestamps 2");
+        next_utf8_unsafe(media_timestamp_end, &next);
 
         if (is_word_character(next)) {
           continue;
@@ -518,7 +546,7 @@ static vector<Slice> match_bank_card_numbers(Slice str) {
     }
     if (ptr != begin) {
       uint32 prev;
-      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev, "match_bank_card_numbers");
+      next_utf8_unsafe(prev_utf8_unsafe(ptr), &prev);
 
       if (prev == '.' || prev == ',' || prev == '+' || prev == '-' || prev == '_' ||
           get_unicode_simple_category(prev) == UnicodeSimpleCategory::Letter) {
@@ -554,7 +582,7 @@ static vector<Slice> match_bank_card_numbers(Slice str) {
     }
     if (card_number_end != end) {
       uint32 next;
-      next_utf8_unsafe(card_number_end, &next, "match_bank_card_numbers 2");
+      next_utf8_unsafe(card_number_end, &next);
       if (next == '-' || next == '_' || get_unicode_simple_category(next) == UnicodeSimpleCategory::Letter) {
         continue;
       }
@@ -629,7 +657,7 @@ static vector<Slice> match_tg_urls(Slice str) {
       auto path_end_ptr = ptr + 1;
       while (path_end_ptr != end) {
         uint32 code = 0;
-        auto next_ptr = next_utf8_unsafe(path_end_ptr, &code, "match_tg_urls");
+        auto next_ptr = next_utf8_unsafe(path_end_ptr, &code);
         if (!is_url_path_symbol(code)) {
           break;
         }
@@ -711,7 +739,7 @@ static vector<Slice> match_urls(Slice str) {
     while (domain_begin_ptr != begin) {
       domain_begin_ptr = prev_utf8_unsafe(domain_begin_ptr);
       uint32 code = 0;
-      auto next_ptr = next_utf8_unsafe(domain_begin_ptr, &code, "match_urls 0");
+      auto next_ptr = next_utf8_unsafe(domain_begin_ptr, &code);
       if (!is_domain_symbol(code)) {
         domain_begin_ptr = next_ptr;
         break;
@@ -720,25 +748,12 @@ static vector<Slice> match_urls(Slice str) {
 
     const unsigned char *last_at_ptr = nullptr;
     const unsigned char *domain_end_ptr = begin + dot_pos;
-    if (domain_begin_ptr == begin || domain_begin_ptr[-1] != '@') {
-      // try to find '@' to the right if there is no '@' to the left
-      while (domain_end_ptr != end) {
-        uint32 code = 0;
-        auto next_ptr = next_utf8_unsafe(domain_end_ptr, &code, "match_urls");
-        if (code == '@') {
-          last_at_ptr = domain_end_ptr;
-        }
-        if (!is_user_data_symbol(code)) {
-          break;
-        }
-        domain_end_ptr = next_ptr;
-      }
-      domain_end_ptr = last_at_ptr == nullptr ? begin + dot_pos : last_at_ptr + 1;
-    }
     while (domain_end_ptr != end) {
       uint32 code = 0;
-      auto next_ptr = next_utf8_unsafe(domain_end_ptr, &code, "match_urls 2");
-      if (!is_domain_symbol(code)) {
+      auto next_ptr = next_utf8_unsafe(domain_end_ptr, &code);
+      if (code == '@') {
+        last_at_ptr = domain_end_ptr;
+      } else if (!is_domain_symbol(code)) {
         break;
       }
       domain_end_ptr = next_ptr;
@@ -748,7 +763,7 @@ static vector<Slice> match_urls(Slice str) {
       while (domain_begin_ptr != begin) {
         domain_begin_ptr = prev_utf8_unsafe(domain_begin_ptr);
         uint32 code = 0;
-        auto next_ptr = next_utf8_unsafe(domain_begin_ptr, &code, "match_urls 3");
+        auto next_ptr = next_utf8_unsafe(domain_begin_ptr, &code);
         if (!is_user_data_symbol(code)) {
           domain_begin_ptr = next_ptr;
           break;
@@ -780,7 +795,7 @@ static vector<Slice> match_urls(Slice str) {
       auto path_end_ptr = url_end_ptr + 1;
       while (path_end_ptr != end) {
         uint32 code = 0;
-        auto next_ptr = next_utf8_unsafe(path_end_ptr, &code, "match_urls 4");
+        auto next_ptr = next_utf8_unsafe(path_end_ptr, &code);
         if (!is_url_path_symbol(code)) {
           break;
         }
@@ -808,7 +823,7 @@ static vector<Slice> match_urls(Slice str) {
       while (user_data_begin_ptr != begin) {
         user_data_begin_ptr = prev_utf8_unsafe(user_data_begin_ptr);
         uint32 code = 0;
-        auto next_ptr = next_utf8_unsafe(user_data_begin_ptr, &code, "match_urls 5");
+        auto next_ptr = next_utf8_unsafe(user_data_begin_ptr, &code);
         if (!is_user_data_symbol(code)) {
           user_data_begin_ptr = next_ptr;
           break;
@@ -828,7 +843,7 @@ static vector<Slice> match_urls(Slice str) {
         while (protocol_begin_ptr != begin) {
           protocol_begin_ptr = prev_utf8_unsafe(protocol_begin_ptr);
           uint32 code = 0;
-          auto next_ptr = next_utf8_unsafe(protocol_begin_ptr, &code, "match_urls 6");
+          auto next_ptr = next_utf8_unsafe(protocol_begin_ptr, &code);
           if (!is_protocol_symbol(code)) {
             protocol_begin_ptr = next_ptr;
             break;
@@ -848,7 +863,7 @@ static vector<Slice> match_urls(Slice str) {
         auto prefix_end = prefix.uend();
         auto prefix_back = prev_utf8_unsafe(prefix_end);
         uint32 code = 0;
-        next_utf8_unsafe(prefix_back, &code, "match_urls 7");
+        next_utf8_unsafe(prefix_back, &code);
         if (is_word_character(code) || code == '/' || code == '#' || code == '@') {
           is_bad = true;
         }
@@ -938,33 +953,30 @@ bool is_email_address(Slice str) {
   Slice userdata;
   Slice domain;
   std::tie(userdata, domain) = split(str, '@');
-  vector<Slice> userdata_parts;
+  if (domain.empty()) {
+    return false;
+  }
+
   size_t prev = 0;
+  size_t userdata_part_count = 0;
   for (size_t i = 0; i < userdata.size(); i++) {
     if (userdata[i] == '.' || userdata[i] == '+') {
-      userdata_parts.push_back(userdata.substr(prev, i - prev));
-      prev = i + 1;
-    }
-  }
-  userdata_parts.push_back(userdata.substr(prev));
-  if (userdata_parts.size() >= 12) {
-    return false;
-  }
-  for (auto &part : userdata_parts) {
-    for (auto c : part) {
-      if (!is_alpha_digit_or_underscore_or_minus(c)) {
+      if (i - prev >= 27) {
         return false;
       }
-    }
-  }
-  if (userdata_parts.back().empty() || userdata_parts.back().size() >= 36) {
-    return false;
-  }
-  userdata_parts.pop_back();
-  for (auto &part : userdata_parts) {
-    if (part.size() >= 27) {
+      userdata_part_count++;
+      prev = i + 1;
+    } else if (!is_alpha_digit_or_underscore_or_minus(userdata[i])) {
       return false;
     }
+  }
+  userdata_part_count++;
+  if (userdata_part_count >= 12) {
+    return false;
+  }
+  auto last_part_length = userdata.size() - prev;
+  if (last_part_length == 0 || last_part_length >= 36) {
+    return false;
   }
 
   vector<Slice> domain_parts = full_split(domain, '.');
@@ -1131,6 +1143,17 @@ static bool is_common_tld(Slice str) {
        "zippo", "zm", "zone", "zuerich",
        // comment for clang-format to prevent it from placing all strings on separate lines
        "zw"});
+  bool is_lower = true;
+  for (auto c : str) {
+    if (static_cast<uint32>(c - 'a') > 'z' - 'a') {
+      is_lower = false;
+      break;
+    }
+  }
+  if (is_lower) {
+    // fast path
+    return tlds.count(str) > 0;
+  }
   string str_lower = utf8_to_lower(str);
   if (str_lower != str && utf8_substr(Slice(str_lower), 1) == utf8_substr(str, 1)) {
     return false;
@@ -1158,10 +1181,12 @@ static Slice fix_url(Slice str) {
   }
   domain.truncate(domain.rfind(':'));
 
-  string domain_lower = domain.str();
-  to_lower_inplace(domain_lower);
-  if (domain_lower == "teiegram.org") {
-    return Slice();
+  if (domain.size() == 12 && (domain[0] == 't' || domain[0] == 'T')) {
+    string domain_lower = domain.str();
+    to_lower_inplace(domain_lower);
+    if (domain_lower == "teiegram.org") {
+      return Slice();
+    }
   }
 
   int32 balance[3] = {0, 0, 0};
@@ -1197,42 +1222,44 @@ static Slice fix_url(Slice str) {
   }
   full_url.remove_suffix(path.size() - path_pos);
 
-  vector<Slice> domain_parts = full_split(domain, '.');
-  if (domain_parts.size() <= 1) {
+  size_t prev = 0;
+  size_t domain_part_count = 0;
+  bool has_non_digit = false;
+  bool is_ipv4 = true;
+  for (size_t i = 0; i <= domain.size(); i++) {
+    if (i == domain.size() || domain[i] == '.') {
+      auto part_size = i - prev;
+      if (part_size == 0 || part_size >= 64 || domain[i - 1] == '-') {
+        return Slice();
+      }
+      if (is_ipv4) {
+        if (part_size > 3) {
+          is_ipv4 = false;
+        }
+        if (part_size == 3 &&
+            (domain[prev] >= '3' || (domain[prev] == '2' && (domain[prev + 1] >= '6' ||
+                                                             (domain[prev + 1] == '5' && domain[prev + 2] >= '6'))))) {
+          is_ipv4 = false;
+        }
+        if (domain[prev] == '0' && part_size >= 2) {
+          is_ipv4 = false;
+        }
+      }
+
+      domain_part_count++;
+      if (i != domain.size()) {
+        prev = i + 1;
+      }
+    } else if (!is_digit(domain[i])) {
+      is_ipv4 = false;
+      has_non_digit = true;
+    }
+  }
+  if (domain_part_count == 1) {
     return Slice();
   }
 
-  bool is_ipv4 = domain_parts.size() == 4;
-  bool has_non_digit = false;
-  for (auto &part : domain_parts) {
-    if (part.empty() || part.size() >= 64) {
-      return Slice();
-    }
-    if (part.back() == '-') {
-      return Slice();
-    }
-
-    if (!has_non_digit) {
-      if (part.size() > 3) {
-        is_ipv4 = false;
-      }
-      for (auto c : part) {
-        if (!is_digit(c)) {
-          is_ipv4 = false;
-          has_non_digit = true;
-        }
-      }
-      if (part.size() == 3 &&
-          (part[0] >= '3' || (part[0] == '2' && (part[1] >= '6' || (part[1] == '5' && part[2] >= '6'))))) {
-        is_ipv4 = false;
-      }
-      if (part[0] == '0' && part.size() >= 2) {
-        is_ipv4 = false;
-      }
-    }
-  }
-
-  if (is_ipv4) {
+  if (is_ipv4 && domain_part_count == 4) {
     return full_url;
   }
 
@@ -1240,7 +1267,7 @@ static Slice fix_url(Slice str) {
     return Slice();
   }
 
-  auto tld = domain_parts.back();
+  auto tld = domain.substr(prev);
   if (utf8_length(tld) <= 1) {
     return Slice();
   }
@@ -1267,9 +1294,14 @@ static Slice fix_url(Slice str) {
     }
   }
 
-  domain_parts.pop_back();
-  if (domain_parts.back().find('_') < domain_parts.back().size()) {
-    return Slice();
+  CHECK(prev > 0);
+  prev--;
+  while (prev-- > 0) {
+    if (domain[prev] == '_') {
+      return Slice();
+    } else if (domain[prev] == '.') {
+      break;
+    }
   }
 
   return full_url;
@@ -1378,6 +1410,24 @@ vector<std::pair<Slice, int32>> find_media_timestamps(Slice str) {
   return result;
 }
 
+void remove_empty_entities(vector<MessageEntity> &entities) {
+  td::remove_if(entities, [](const auto &entity) {
+    if (entity.length <= 0) {
+      return true;
+    }
+    switch (entity.type) {
+      case MessageEntity::Type::TextUrl:
+        return entity.argument.empty();
+      case MessageEntity::Type::MentionName:
+        return !entity.user_id.is_valid();
+      case MessageEntity::Type::CustomEmoji:
+        return entity.document_id == 0;
+      default:
+        return false;
+    }
+  });
+}
+
 static int32 text_length(Slice text) {
   return narrow_cast<int32>(utf8_utf16_length(text));
 }
@@ -1423,7 +1473,8 @@ static constexpr int32 get_continuous_entities_mask() {
          get_entity_type_mask(MessageEntity::Type::MentionName) | get_entity_type_mask(MessageEntity::Type::Cashtag) |
          get_entity_type_mask(MessageEntity::Type::PhoneNumber) |
          get_entity_type_mask(MessageEntity::Type::BankCardNumber) |
-         get_entity_type_mask(MessageEntity::Type::MediaTimestamp);
+         get_entity_type_mask(MessageEntity::Type::MediaTimestamp) |
+         get_entity_type_mask(MessageEntity::Type::CustomEmoji);
 }
 
 static constexpr int32 get_pre_entities_mask() {
@@ -1434,7 +1485,7 @@ static constexpr int32 get_pre_entities_mask() {
 static constexpr int32 get_user_entities_mask() {
   return get_splittable_entities_mask() | get_blockquote_entities_mask() |
          get_entity_type_mask(MessageEntity::Type::TextUrl) | get_entity_type_mask(MessageEntity::Type::MentionName) |
-         get_pre_entities_mask();
+         get_entity_type_mask(MessageEntity::Type::CustomEmoji) | get_pre_entities_mask();
 }
 
 static int32 is_splittable_entity(MessageEntity::Type type) {
@@ -1618,10 +1669,11 @@ static void fix_entity_offsets(Slice text, vector<MessageEntity> &entities) {
       entity.offset = utf16_pos;
     }
 
+    uint32 skipped_code = 0;
     while (ptr != end && cnt > 0) {
       unsigned char c = ptr[0];
       utf16_pos += 1 + (c >= 0xf0);
-      ptr = next_utf8_unsafe(ptr, nullptr, "fix_entity_offsets");
+      ptr = next_utf8_unsafe(ptr, &skipped_code);
 
       pos = static_cast<int32>(ptr - begin);
       if (entity_begin == pos) {
@@ -1636,7 +1688,7 @@ static void fix_entity_offsets(Slice text, vector<MessageEntity> &entities) {
   }
 }
 
-vector<MessageEntity> find_entities(Slice text, bool skip_bot_commands, bool skip_media_timestamps, bool skip_urls) {
+vector<MessageEntity> find_entities(Slice text, bool skip_bot_commands, bool skip_media_timestamps) {
   vector<MessageEntity> entities;
 
   auto add_entities = [&entities, &text](MessageEntity::Type type, vector<Slice> (*find_entities_f)(Slice)) mutable {
@@ -1655,15 +1707,13 @@ vector<MessageEntity> find_entities(Slice text, bool skip_bot_commands, bool ski
   add_entities(MessageEntity::Type::Cashtag, find_cashtags);
   // TODO find_phone_numbers
   add_entities(MessageEntity::Type::BankCardNumber, find_bank_card_numbers);
-  if (!skip_urls) {
-    add_entities(MessageEntity::Type::Url, find_tg_urls);
-    auto urls = find_urls(text);
-    for (auto &url : urls) {
-      auto type = url.second ? MessageEntity::Type::EmailAddress : MessageEntity::Type::Url;
-      auto offset = narrow_cast<int32>(url.first.begin() - text.begin());
-      auto length = narrow_cast<int32>(url.first.size());
-      entities.emplace_back(type, offset, length);
-    }
+  add_entities(MessageEntity::Type::Url, find_tg_urls);
+  auto urls = find_urls(text);
+  for (auto &url : urls) {
+    auto type = url.second ? MessageEntity::Type::EmailAddress : MessageEntity::Type::Url;
+    auto offset = narrow_cast<int32>(url.first.begin() - text.begin());
+    auto length = narrow_cast<int32>(url.first.size());
+    entities.emplace_back(type, offset, length);
   }
   if (!skip_media_timestamps) {
     auto media_timestamps = find_media_timestamps(text);
@@ -1730,8 +1780,8 @@ static bool is_plain_domain(Slice url) {
   return url.find('/') >= url.size() && url.find('?') >= url.size() && url.find('#') >= url.size();
 }
 
-string get_first_url(Slice text, const vector<MessageEntity> &entities) {
-  for (auto &entity : entities) {
+string get_first_url(const FormattedText &text) {
+  for (auto &entity : text.entities) {
     switch (entity.type) {
       case MessageEntity::Type::Mention:
         break;
@@ -1740,7 +1790,10 @@ string get_first_url(Slice text, const vector<MessageEntity> &entities) {
       case MessageEntity::Type::BotCommand:
         break;
       case MessageEntity::Type::Url: {
-        Slice url = utf8_utf16_substr(text, entity.offset, entity.length);
+        if (entity.length <= 4) {
+          continue;
+        }
+        auto url = utf8_utf16_substr(text.text, entity.offset, entity.length);
         string scheme = to_lower(url.substr(0, 4));
         if (scheme == "ton:" || begins_with(scheme, "tg:") || scheme == "ftp:" || is_plain_domain(url)) {
           continue;
@@ -1783,6 +1836,8 @@ string get_first_url(Slice text, const vector<MessageEntity> &entities) {
       case MessageEntity::Type::MediaTimestamp:
         break;
       case MessageEntity::Type::Spoiler:
+        break;
+      case MessageEntity::Type::CustomEmoji:
         break;
       default:
         UNREACHABLE();
@@ -1984,6 +2039,8 @@ static Result<vector<MessageEntity>> do_parse_markdown_v2(CSlice text, string &r
             return c == '~';
           case MessageEntity::Type::Spoiler:
             return c == '|' && text[i + 1] == '|';
+          case MessageEntity::Type::CustomEmoji:
+            return c == ']';
           default:
             UNREACHABLE();
             return false;
@@ -2050,6 +2107,15 @@ static Result<vector<MessageEntity>> do_parse_markdown_v2(CSlice text, string &r
             type = MessageEntity::Type::Code;
           }
           break;
+        case '!':
+          if (text[i + 1] == '[') {
+            i++;
+            type = MessageEntity::Type::CustomEmoji;
+          } else {
+            return Status::Error(400, PSLICE() << "Character '" << text[i]
+                                               << "' is reserved and must be escaped with the preceding '\\'");
+          }
+          break;
         default:
           return Status::Error(
               400, PSLICE() << "Character '" << text[i] << "' is reserved and must be escaped with the preceding '\\'");
@@ -2060,6 +2126,7 @@ static Result<vector<MessageEntity>> do_parse_markdown_v2(CSlice text, string &r
       auto type = nested_entities.back().type;
       auto argument = std::move(nested_entities.back().argument);
       UserId user_id;
+      int64 document_id = 0;
       bool skip_entity = utf16_offset == nested_entities.back().entity_offset;
       switch (type) {
         case MessageEntity::Type::Bold:
@@ -2106,6 +2173,28 @@ static Result<vector<MessageEntity>> do_parse_markdown_v2(CSlice text, string &r
           }
           break;
         }
+        case MessageEntity::Type::CustomEmoji: {
+          if (text[i + 1] != '(') {
+            return Status::Error(400, "Custom emoji entity must contain a tg://emoji URL");
+          }
+          i += 2;
+          string url;
+          auto url_begin_pos = i;
+          while (i < text.size() && text[i] != ')') {
+            if (text[i] == '\\' && text[i + 1] > 0 && text[i + 1] <= 126) {
+              url += text[i + 1];
+              i += 2;
+              continue;
+            }
+            url += text[i++];
+          }
+          if (text[i] != ')') {
+            return Status::Error(400, PSLICE()
+                                          << "Can't find end of a custom emoji URL at byte offset " << url_begin_pos);
+          }
+          TRY_RESULT_ASSIGN(document_id, LinkManager::get_link_custom_emoji_document_id(url));
+          break;
+        }
         default:
           UNREACHABLE();
           return false;
@@ -2116,6 +2205,8 @@ static Result<vector<MessageEntity>> do_parse_markdown_v2(CSlice text, string &r
         auto entity_length = utf16_offset - entity_offset;
         if (user_id.is_valid()) {
           entities.emplace_back(entity_offset, entity_length, user_id);
+        } else if (document_id != 0) {
+          entities.emplace_back(type, entity_offset, entity_length, document_id);
         } else {
           entities.emplace_back(type, entity_offset, entity_length, std::move(argument));
         }
@@ -2502,7 +2593,7 @@ static FormattedText parse_markdown_v3_without_pre(Slice text, vector<MessageEnt
     CHECK(entity.offset + entity.length <= utf16_offset);
   }
 
-  td::remove_if(entities, [](const auto &entity) { return entity.length == 0; });
+  remove_empty_entities(entities);
 
   sort_entities(entities);
   return {std::move(new_text), std::move(entities)};
@@ -2948,7 +3039,8 @@ static Result<vector<MessageEntity>> do_parse_html(CSlice text, string &result) 
       string tag_name = to_lower(text.substr(begin_pos + 1, i - begin_pos - 1));
       if (tag_name != "a" && tag_name != "b" && tag_name != "strong" && tag_name != "i" && tag_name != "em" &&
           tag_name != "s" && tag_name != "strike" && tag_name != "del" && tag_name != "u" && tag_name != "ins" &&
-          tag_name != "tg-spoiler" && tag_name != "span" && tag_name != "pre" && tag_name != "code") {
+          tag_name != "tg-spoiler" && tag_name != "tg-emoji" && tag_name != "span" && tag_name != "pre" &&
+          tag_name != "code") {
         return Status::Error(400, PSLICE()
                                       << "Unsupported start tag \"" << tag_name << "\" at byte offset " << begin_pos);
       }
@@ -3026,6 +3118,8 @@ static Result<vector<MessageEntity>> do_parse_html(CSlice text, string &result) 
           argument = attribute_value.substr(9);
         } else if (tag_name == "span" && attribute_name == Slice("class") && begins_with(attribute_value, "tg-")) {
           argument = attribute_value.substr(3);
+        } else if (tag_name == "tg-emoji" && attribute_name == Slice("emoji-id")) {
+          argument = std::move(attribute_value);
         }
       }
 
@@ -3071,6 +3165,12 @@ static Result<vector<MessageEntity>> do_parse_html(CSlice text, string &result) 
           entities.emplace_back(MessageEntity::Type::Underline, entity_offset, entity_length);
         } else if (tag_name == "tg-spoiler" || (tag_name == "span" && nested_entities.back().argument == "spoiler")) {
           entities.emplace_back(MessageEntity::Type::Spoiler, entity_offset, entity_length);
+        } else if (tag_name == "tg-emoji") {
+          auto r_document_id = to_integer_safe<int64>(nested_entities.back().argument);
+          if (r_document_id.is_error() || r_document_id.ok() == 0) {
+            return Status::Error(400, "Invalid custom emoji identifier specified");
+          }
+          entities.emplace_back(MessageEntity::Type::CustomEmoji, entity_offset, entity_length, r_document_id.ok());
         } else if (tag_name == "a") {
           auto url = std::move(nested_entities.back().argument);
           if (url.empty()) {
@@ -3202,6 +3302,15 @@ vector<tl_object_ptr<secret_api::MessageEntity>> get_input_secret_message_entiti
       case MessageEntity::Type::MediaTimestamp:
         break;
       case MessageEntity::Type::Spoiler:
+        if (layer >= static_cast<int32>(SecretChatLayer::SpoilerAndCustomEmojiEntities)) {
+          result.push_back(make_tl_object<secret_api::messageEntitySpoiler>(entity.offset, entity.length));
+        }
+        break;
+      case MessageEntity::Type::CustomEmoji:
+        if (layer >= static_cast<int32>(SecretChatLayer::SpoilerAndCustomEmojiEntities)) {
+          result.push_back(
+              make_tl_object<secret_api::messageEntityCustomEmoji>(entity.offset, entity.length, entity.document_id));
+        }
         break;
       default:
         UNREACHABLE();
@@ -3314,6 +3423,11 @@ Result<vector<MessageEntity>> get_message_entities(const ContactsManager *contac
       case td_api::textEntityTypeSpoiler::ID:
         entities.emplace_back(MessageEntity::Type::Spoiler, offset, length);
         break;
+      case td_api::textEntityTypeCustomEmoji::ID: {
+        auto entity = static_cast<td_api::textEntityTypeCustomEmoji *>(input_entity->type_.get());
+        entities.emplace_back(MessageEntity::Type::CustomEmoji, offset, length, entity->custom_emoji_id_);
+        break;
+      }
       default:
         UNREACHABLE();
     }
@@ -3448,6 +3562,11 @@ vector<MessageEntity> get_message_entities(const ContactsManager *contacts_manag
         entities.emplace_back(entity->offset_, entity->length_, user_id);
         break;
       }
+      case telegram_api::messageEntityCustomEmoji::ID: {
+        auto entity = static_cast<const telegram_api::messageEntityCustomEmoji *>(server_entity.get());
+        entities.emplace_back(MessageEntity::Type::CustomEmoji, entity->offset_, entity->length_, entity->document_id_);
+        break;
+      }
       default:
         UNREACHABLE();
     }
@@ -3455,9 +3574,13 @@ vector<MessageEntity> get_message_entities(const ContactsManager *contacts_manag
   return entities;
 }
 
-vector<MessageEntity> get_message_entities(vector<tl_object_ptr<secret_api::MessageEntity>> &&secret_entities) {
+vector<MessageEntity> get_message_entities(Td *td, vector<tl_object_ptr<secret_api::MessageEntity>> &&secret_entities,
+                                           bool is_premium, MultiPromiseActor &load_data_multipromise) {
+  constexpr size_t MAX_SECRET_CHAT_ENTITIES = 1000;
+  constexpr size_t MAX_CUSTOM_EMOJI_ENTITIES = 100;
   vector<MessageEntity> entities;
   entities.reserve(secret_entities.size());
+  vector<int64> document_ids;
   for (auto &secret_entity : secret_entities) {
     switch (secret_entity->get_id()) {
       case secret_api::messageEntityUnknown::ID:
@@ -3553,10 +3676,41 @@ vector<MessageEntity> get_message_entities(vector<tl_object_ptr<secret_api::Mess
       case secret_api::messageEntityMentionName::ID:
         // skip all name mentions in secret chats
         break;
+      case secret_api::messageEntitySpoiler::ID: {
+        auto entity = static_cast<const secret_api::messageEntitySpoiler *>(secret_entity.get());
+        entities.emplace_back(MessageEntity::Type::Spoiler, entity->offset_, entity->length_);
+        break;
+      }
+      case secret_api::messageEntityCustomEmoji::ID: {
+        auto entity = static_cast<const secret_api::messageEntityCustomEmoji *>(secret_entity.get());
+        if (is_premium || !td->stickers_manager_->is_premium_custom_emoji(entity->document_id_, false)) {
+          if (document_ids.size() < MAX_CUSTOM_EMOJI_ENTITIES) {
+            entities.emplace_back(MessageEntity::Type::CustomEmoji, entity->offset_, entity->length_,
+                                  entity->document_id_);
+            document_ids.push_back(entity->document_id_);
+          }
+        }
+        break;
+      }
       default:
         UNREACHABLE();
     }
+
+    if (entities.size() >= MAX_SECRET_CHAT_ENTITIES) {
+      break;
+    }
   }
+
+  if (!document_ids.empty() && !is_premium) {
+    // preload custom emoji to check that they aren't premium
+    td->stickers_manager_->get_custom_emoji_stickers(
+        std::move(document_ids), true,
+        PromiseCreator::lambda(
+            [promise = load_data_multipromise.get_promise()](td_api::object_ptr<td_api::stickers> result) mutable {
+              promise.set_value(Unit());
+            }));
+  }
+
   return entities;
 }
 
@@ -3732,7 +3886,7 @@ static std::pair<size_t, int32> remove_invalid_entities(const string &text, vect
   int32 utf16_offset = 0;
   int32 last_non_whitespace_utf16_offset = -1;
 
-  td::remove_if(entities, [](const auto &entity) { return entity.length == 0; });
+  remove_empty_entities(entities);
 
   for (size_t pos = 0; pos <= text.size(); pos++) {
     while (!nested_entities_stack.empty()) {
@@ -3797,7 +3951,7 @@ static std::pair<size_t, int32> remove_invalid_entities(const string &text, vect
   CHECK(nested_entities_stack.empty());
   CHECK(current_entity == entities.size());
 
-  td::remove_if(entities, [](const auto &entity) { return entity.length == 0; });
+  remove_empty_entities(entities);
 
   return {last_non_whitespace_pos, last_non_whitespace_utf16_offset};
 }
@@ -3987,7 +4141,7 @@ Status fix_formatted_text(string &text, vector<MessageEntity> &entities, bool al
         return Status::Error(400, PSLICE() << "Receive an entity with incorrect length " << entity.length);
       }
     }
-    td::remove_if(entities, [](const MessageEntity &entity) { return entity.length == 0; });
+    remove_empty_entities(entities);
 
     fix_entities(entities);
 
@@ -4142,15 +4296,32 @@ td_api::object_ptr<td_api::formattedText> extract_input_caption(
   }
 }
 
-Result<FormattedText> process_input_caption(const ContactsManager *contacts_manager, DialogId dialog_id,
-                                            tl_object_ptr<td_api::formattedText> &&caption, bool is_bot) {
-  if (caption == nullptr) {
-    return FormattedText();
+Result<FormattedText> get_formatted_text(const Td *td, DialogId dialog_id,
+                                         td_api::object_ptr<td_api::formattedText> &&text, bool is_bot,
+                                         bool allow_empty, bool skip_media_timestamps, bool for_draft) {
+  if (text == nullptr) {
+    if (allow_empty) {
+      return FormattedText();
+    }
+
+    return Status::Error(400, "Text must be non-empty");
   }
-  TRY_RESULT(entities, get_message_entities(contacts_manager, std::move(caption->entities_)));
-  TRY_STATUS(fix_formatted_text(caption->text_, entities, true, false,
-                                need_always_skip_bot_commands(contacts_manager, dialog_id, is_bot), is_bot, false));
-  return FormattedText{std::move(caption->text_), std::move(entities)};
+
+  TRY_RESULT(entities, get_message_entities(td->contacts_manager_.get(), std::move(text->entities_)));
+  auto need_skip_bot_commands = need_always_skip_bot_commands(td->contacts_manager_.get(), dialog_id, is_bot);
+  bool parse_markdown = td->option_manager_->get_option_boolean("always_parse_markdown");
+  TRY_STATUS(fix_formatted_text(text->text_, entities, allow_empty, parse_markdown, need_skip_bot_commands,
+                                is_bot || skip_media_timestamps || parse_markdown, for_draft));
+
+  FormattedText result{std::move(text->text_), std::move(entities)};
+  if (parse_markdown) {
+    result = parse_markdown_v3(std::move(result));
+    fix_formatted_text(result.text, result.entities, allow_empty, false, need_skip_bot_commands,
+                       is_bot || skip_media_timestamps, for_draft)
+        .ensure();
+  }
+  remove_unallowed_entities(td, result, dialog_id);
+  return std::move(result);
 }
 
 void add_formatted_text_dependencies(Dependencies &dependencies, const FormattedText *text) {
@@ -4253,6 +4424,10 @@ vector<tl_object_ptr<telegram_api::MessageEntity>> get_input_message_entities(co
                                                                                      r_input_user.move_as_ok()));
         break;
       }
+      case MessageEntity::Type::CustomEmoji:
+        result.push_back(
+            make_tl_object<telegram_api::messageEntityCustomEmoji>(entity.offset, entity.length, entity.document_id));
+        break;
       default:
         UNREACHABLE();
     }
@@ -4290,6 +4465,44 @@ vector<tl_object_ptr<telegram_api::MessageEntity>> get_input_message_entities(co
     return get_input_message_entities(contacts_manager, text->entities, source);
   }
   return {};
+}
+
+void remove_premium_custom_emoji_entities(const Td *td, vector<MessageEntity> &entities, bool remove_unknown) {
+  td::remove_if(entities, [&](const MessageEntity &entity) {
+    return entity.type == MessageEntity::Type::CustomEmoji &&
+           td->stickers_manager_->is_premium_custom_emoji(entity.document_id, remove_unknown);
+  });
+}
+
+void remove_unallowed_entities(const Td *td, FormattedText &text, DialogId dialog_id) {
+  if (text.entities.empty()) {
+    return;
+  }
+
+  if (dialog_id.get_type() == DialogType::SecretChat) {
+    auto layer = td->contacts_manager_->get_secret_chat_layer(dialog_id.get_secret_chat_id());
+    td::remove_if(text.entities, [layer](const MessageEntity &entity) {
+      if (layer < static_cast<int32>(SecretChatLayer::NewEntities) &&
+          (entity.type == MessageEntity::Type::Underline || entity.type == MessageEntity::Type::Strikethrough ||
+           entity.type == MessageEntity::Type::BlockQuote)) {
+        return true;
+      }
+      if (layer < static_cast<int32>(SecretChatLayer::SpoilerAndCustomEmojiEntities) &&
+          (entity.type == MessageEntity::Type::Spoiler || entity.type == MessageEntity::Type::CustomEmoji)) {
+        return true;
+      }
+      return false;
+    });
+
+    if (layer < static_cast<int32>(SecretChatLayer::NewEntities)) {
+      sort_entities(text.entities);
+      remove_intersecting_entities(text.entities);
+    }
+  }
+  if (!td->option_manager_->get_option_boolean("is_premium") &&
+      dialog_id != DialogId(td->contacts_manager_->get_my_id())) {
+    remove_premium_custom_emoji_entities(td, text.entities, false);
+  }
 }
 
 }  // namespace td

@@ -174,7 +174,7 @@ class RequestSimpleWebViewQuery final : public Td::ResultHandler {
   }
 
   void send(tl_object_ptr<telegram_api::InputUser> &&input_user, const string &url,
-            const td_api::object_ptr<td_api::themeParameters> &theme) {
+            const td_api::object_ptr<td_api::themeParameters> &theme, string &&platform) {
     tl_object_ptr<telegram_api::dataJSON> theme_parameters;
     int32 flags = 0;
     if (theme != nullptr) {
@@ -183,8 +183,8 @@ class RequestSimpleWebViewQuery final : public Td::ResultHandler {
       theme_parameters = make_tl_object<telegram_api::dataJSON>(string());
       theme_parameters->data_ = ThemeManager::get_theme_parameters_json_string(theme, false);
     }
-    send_query(G()->net_query_creator().create(
-        telegram_api::messages_requestSimpleWebView(flags, std::move(input_user), url, std::move(theme_parameters))));
+    send_query(G()->net_query_creator().create(telegram_api::messages_requestSimpleWebView(
+        flags, std::move(input_user), url, std::move(theme_parameters), platform)));
   }
 
   void on_result(BufferSlice packet) final {
@@ -346,14 +346,14 @@ Result<tl_object_ptr<telegram_api::InputBotInlineMessage>> InlineQueriesManager:
     tl_object_ptr<td_api::InputMessageContent> &&input_message_content,
     tl_object_ptr<td_api::ReplyMarkup> &&reply_markup_ptr, int32 allowed_media_content_id) const {
   if (input_message_content == nullptr) {
-    return Status::Error(400, "Inline message can't be empty");
+    return Status::Error(400, "Inline message must be non-empty");
   }
   TRY_RESULT(reply_markup, get_reply_markup(std::move(reply_markup_ptr), true, true, false, true));
   auto input_reply_markup = get_input_reply_markup(td_->contacts_manager_.get(), reply_markup);
 
   auto constructor_id = input_message_content->get_id();
   if (constructor_id == td_api::inputMessageText::ID) {
-    TRY_RESULT(input_message_text, process_input_message_text(td_->contacts_manager_.get(), DialogId(),
+    TRY_RESULT(input_message_text, process_input_message_text(td_, DialogId(td_->contacts_manager_->get_my_id()),
                                                               std::move(input_message_content), true));
     int32 flags = 0;
     if (input_reply_markup != nullptr) {
@@ -401,8 +401,8 @@ Result<tl_object_ptr<telegram_api::InputBotInlineMessage>> InlineQueriesManager:
     return venue.get_input_bot_inline_message_media_venue(std::move(input_reply_markup));
   }
   if (constructor_id == allowed_media_content_id) {
-    TRY_RESULT(caption, process_input_caption(td_->contacts_manager_.get(), DialogId(),
-                                              extract_input_caption(input_message_content), true));
+    TRY_RESULT(caption, get_formatted_text(td_, DialogId(td_->contacts_manager_->get_my_id()),
+                                           extract_input_caption(input_message_content), true, true, true, false));
     int32 flags = 0;
     if (input_reply_markup != nullptr) {
       flags |= telegram_api::inputBotInlineMessageMediaAuto::REPLY_MARKUP_MASK;
@@ -499,11 +499,12 @@ void InlineQueriesManager::answer_inline_query(
 
 void InlineQueriesManager::get_simple_web_view_url(UserId bot_user_id, string &&url,
                                                    const td_api::object_ptr<td_api::themeParameters> &theme,
-                                                   Promise<string> &&promise) {
+                                                   string &&platform, Promise<string> &&promise) {
   TRY_RESULT_PROMISE(promise, input_user, td_->contacts_manager_->get_input_user(bot_user_id));
   TRY_RESULT_PROMISE(promise, bot_data, td_->contacts_manager_->get_bot_data(bot_user_id));
 
-  td_->create_handler<RequestSimpleWebViewQuery>(std::move(promise))->send(std::move(input_user), url, theme);
+  td_->create_handler<RequestSimpleWebViewQuery>(std::move(promise))
+      ->send(std::move(input_user), url, theme, std::move(platform));
 }
 
 void InlineQueriesManager::send_web_view_data(UserId bot_user_id, string &&button_text, string &&data,
@@ -1125,6 +1126,25 @@ tl_object_ptr<td_api::thumbnail> copy(const td_api::thumbnail &obj) {
   return td_api::make_object<td_api::thumbnail>(std::move(format), obj.width_, obj.height_, copy(obj.file_));
 }
 
+static tl_object_ptr<td_api::thumbnail> copy_thumbnail(const tl_object_ptr<td_api::thumbnail> &obj) {
+  return copy(obj);
+}
+
+template <>
+tl_object_ptr<td_api::StickerFormat> copy(const td_api::StickerFormat &obj) {
+  switch (obj.get_id()) {
+    case td_api::stickerFormatWebp::ID:
+      return td_api::make_object<td_api::stickerFormatWebp>();
+    case td_api::stickerFormatTgs::ID:
+      return td_api::make_object<td_api::stickerFormatTgs>();
+    case td_api::stickerFormatWebm::ID:
+      return td_api::make_object<td_api::stickerFormatWebm>();
+    default:
+      UNREACHABLE();
+  }
+  return nullptr;
+}
+
 template <>
 tl_object_ptr<td_api::MaskPoint> copy(const td_api::MaskPoint &obj) {
   switch (obj.get_id()) {
@@ -1150,16 +1170,12 @@ tl_object_ptr<td_api::maskPosition> copy(const td_api::maskPosition &obj) {
 template <>
 tl_object_ptr<td_api::StickerType> copy(const td_api::StickerType &obj) {
   switch (obj.get_id()) {
-    case td_api::stickerTypeStatic::ID:
-      return td_api::make_object<td_api::stickerTypeStatic>();
-    case td_api::stickerTypeAnimated::ID:
-      return td_api::make_object<td_api::stickerTypeAnimated>();
-    case td_api::stickerTypeVideo::ID:
-      return td_api::make_object<td_api::stickerTypeVideo>();
-    case td_api::stickerTypeMask::ID: {
-      auto &mask_position = static_cast<const td_api::stickerTypeMask &>(obj).mask_position_;
-      return td_api::make_object<td_api::stickerTypeMask>(copy(mask_position));
-    }
+    case td_api::stickerTypeRegular::ID:
+      return td_api::make_object<td_api::stickerTypeRegular>();
+    case td_api::stickerTypeMask::ID:
+      return td_api::make_object<td_api::stickerTypeMask>();
+    case td_api::stickerTypeCustomEmoji::ID:
+      return td_api::make_object<td_api::stickerTypeCustomEmoji>();
     default:
       UNREACHABLE();
   }
@@ -1205,6 +1221,26 @@ static tl_object_ptr<td_api::closedVectorPath> copy_closed_vector_path(
 }
 
 template <>
+tl_object_ptr<td_api::SpeechRecognitionResult> copy(const td_api::SpeechRecognitionResult &obj) {
+  switch (obj.get_id()) {
+    case td_api::speechRecognitionResultPending::ID:
+      return td_api::make_object<td_api::speechRecognitionResultPending>(
+          static_cast<const td_api::speechRecognitionResultPending &>(obj).partial_text_);
+    case td_api::speechRecognitionResultText::ID:
+      return td_api::make_object<td_api::speechRecognitionResultText>(
+          static_cast<const td_api::speechRecognitionResultText &>(obj).text_);
+    case td_api::speechRecognitionResultError::ID: {
+      auto *error = static_cast<const td_api::speechRecognitionResultError &>(obj).error_.get();
+      return td_api::make_object<td_api::speechRecognitionResultError>(
+          td_api::make_object<td_api::error>(error->code_, error->message_));
+    }
+    default:
+      UNREACHABLE();
+  }
+  return nullptr;
+}
+
+template <>
 tl_object_ptr<td_api::animation> copy(const td_api::animation &obj) {
   return td_api::make_object<td_api::animation>(obj.duration_, obj.width_, obj.height_, obj.file_name_, obj.mime_type_,
                                                 obj.has_stickers_, copy(obj.minithumbnail_), copy(obj.thumbnail_),
@@ -1215,7 +1251,7 @@ template <>
 tl_object_ptr<td_api::audio> copy(const td_api::audio &obj) {
   return td_api::make_object<td_api::audio>(obj.duration_, obj.title_, obj.performer_, obj.file_name_, obj.mime_type_,
                                             copy(obj.album_cover_minithumbnail_), copy(obj.album_cover_thumbnail_),
-                                            copy(obj.audio_));
+                                            transform(obj.external_album_covers_, copy_thumbnail), copy(obj.audio_));
 }
 
 template <>
@@ -1232,9 +1268,10 @@ tl_object_ptr<td_api::photo> copy(const td_api::photo &obj) {
 
 template <>
 tl_object_ptr<td_api::sticker> copy(const td_api::sticker &obj) {
-  return td_api::make_object<td_api::sticker>(obj.set_id_, obj.width_, obj.height_, obj.emoji_, copy(obj.type_),
+  return td_api::make_object<td_api::sticker>(obj.set_id_, obj.width_, obj.height_, obj.emoji_, copy(obj.format_),
+                                              copy(obj.type_), copy(obj.mask_position_), obj.custom_emoji_id_,
                                               transform(obj.outline_, copy_closed_vector_path), copy(obj.thumbnail_),
-                                              copy(obj.premium_animation_), copy(obj.sticker_));
+                                              obj.is_premium_, copy(obj.premium_animation_), copy(obj.sticker_));
 }
 
 template <>
@@ -1246,8 +1283,8 @@ tl_object_ptr<td_api::video> copy(const td_api::video &obj) {
 
 template <>
 tl_object_ptr<td_api::voiceNote> copy(const td_api::voiceNote &obj) {
-  return td_api::make_object<td_api::voiceNote>(obj.duration_, obj.waveform_, obj.mime_type_, obj.is_recognized_,
-                                                obj.recognized_text_, copy(obj.voice_));
+  return td_api::make_object<td_api::voiceNote>(obj.duration_, obj.waveform_, obj.mime_type_,
+                                                copy(obj.speech_recognition_result_), copy(obj.voice_));
 }
 
 template <>

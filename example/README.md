@@ -73,7 +73,7 @@ at [tdl](https://github.com/Bannerets/tdl), which provides a convenient, fully-a
 You can also see [TdNode](https://github.com/puppy0cam/TdNode), [tglib](https://github.com/nodegin/tglib), [node-tdlib](https://github.com/wfjsw/node-tdlib), [tdlnode](https://github.com/fonbah/tdlnode),
 [Paper Plane](https://github.com/par6n/paper-plane), or [node-tlg](https://github.com/dilongfa/node-tlg) for other examples of TDLib JSON interface integration with Node.js.
 
-See also the source code of [DIBgram](https://github.com/DIBgram/DIBgram) - an unofficial Telegram web app which looks like Telegram Desktop.
+See also the source code of [DIBgram](https://github.com/DIBgram/DIBgram) - an unofficial Telegram web application which looks like Telegram Desktop.
 
 TDLib can be used also from NativeScript through the [JSON](https://github.com/tdlib/td#using-json) interface.
 See [nativescript-tglib](https://github.com/arpit2438735/nativescript-tglib) as an example of a NativeScript library for building Telegram clients.
@@ -145,7 +145,7 @@ See [example/ios](https://github.com/tdlib/td/tree/master/example/ios) for an ex
 
 See [TDLibKit](https://github.com/Swiftgram/TDLibKit), [tdlib-swift](https://github.com/modestman/tdlib-swift), or [TDLib-iOS](https://github.com/leoMehlig/TDLib-iOS), which provide convenient TDLib clients with automatically generated and fully-documented classes for all TDLib API methods and objects.
 
-See also the source code of [Moc](https://github.com/ggoraa/moc) - a native and powerful macOS and iPadOS Telegram client, optimized for moderating large communities and personal use.
+See also the source code of [Moc](https://github.com/mock-foundation/moc) - a native and powerful macOS and iPadOS Telegram client, optimized for moderating large communities and personal use.
 
 See [example/swift](https://github.com/tdlib/td/tree/master/example/swift) for an example of a macOS Swift application.
 
