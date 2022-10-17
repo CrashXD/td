@@ -6,7 +6,7 @@ if (POLICY CMP0065)
   cmake_policy(SET CMP0065 NEW)
 endif()
 
-project(TDLib VERSION 1.8.6 LANGUAGES CXX C)
+project(TDLib VERSION 1.8.7 LANGUAGES CXX C)
 
 if (NOT DEFINED CMAKE_MODULE_PATH)
   set(CMAKE_MODULE_PATH "")
@@ -362,6 +362,7 @@ set(TDLIB_SOURCE
   td/telegram/InlineQueriesManager.cpp
   td/telegram/InputDialogId.cpp
   td/telegram/InputGroupCallId.cpp
+  td/telegram/InputInvoice.cpp
   td/telegram/InputMessageText.cpp
   td/telegram/JsonValue.cpp
   td/telegram/LanguagePackManager.cpp
@@ -372,6 +373,7 @@ set(TDLIB_SOURCE
   td/telegram/MessageContent.cpp
   td/telegram/MessageContentType.cpp
   td/telegram/MessageEntity.cpp
+  td/telegram/MessageExtendedMedia.cpp
   td/telegram/MessageId.cpp
   td/telegram/MessageReaction.cpp
   td/telegram/MessageReplyInfo.cpp
@@ -406,6 +408,7 @@ set(TDLIB_SOURCE
   td/telegram/NotificationSound.cpp
   td/telegram/NotificationType.cpp
   td/telegram/OptionManager.cpp
+  td/telegram/OrderInfo.cpp
   td/telegram/Payments.cpp
   td/telegram/PasswordManager.cpp
   td/telegram/PhoneNumberManager.cpp
@@ -514,6 +517,7 @@ set(TDLIB_SOURCE
   td/telegram/Contact.h
   td/telegram/ContactsManager.h
   td/telegram/CountryInfoManager.h
+  td/telegram/CustomEmojiId.h
   td/telegram/DelayDispatcher.h
   td/telegram/Dependencies.h
   td/telegram/DeviceTokenManager.h
@@ -585,8 +589,10 @@ set(TDLIB_SOURCE
   td/telegram/InlineQueriesManager.h
   td/telegram/InputDialogId.h
   td/telegram/InputGroupCallId.h
+  td/telegram/InputInvoice.h
   td/telegram/InputMessageText.h
   td/telegram/JsonValue.h
+  td/telegram/LabeledPricePart.h
   td/telegram/LanguagePackManager.h
   td/telegram/LinkManager.h
   td/telegram/Location.h
@@ -598,6 +604,7 @@ set(TDLIB_SOURCE
   td/telegram/MessageContentType.h
   td/telegram/MessageCopyOptions.h
   td/telegram/MessageEntity.h
+  td/telegram/MessageExtendedMedia.h
   td/telegram/MessageId.h
   td/telegram/MessageLinkInfo.h
   td/telegram/MessageReaction.h
@@ -646,6 +653,7 @@ set(TDLIB_SOURCE
   td/telegram/NotificationSoundType.h
   td/telegram/NotificationType.h
   td/telegram/OptionManager.h
+  td/telegram/OrderInfo.h
   td/telegram/PasswordManager.h
   td/telegram/Payments.h
   td/telegram/PhoneNumberManager.h
@@ -727,13 +735,15 @@ set(TDLIB_SOURCE
   td/telegram/files/FileManager.hpp
   td/telegram/files/FileSourceId.hpp
   td/telegram/Game.hpp
+  td/telegram/InputInvoice.hpp
   td/telegram/InputMessageText.hpp
   td/telegram/MessageEntity.hpp
+  td/telegram/MessageExtendedMedia.hpp
   td/telegram/MessageReaction.hpp
   td/telegram/MessageReplyInfo.hpp
   td/telegram/MinChannel.hpp
   td/telegram/NotificationSettings.hpp
-  td/telegram/Payments.hpp
+  td/telegram/OrderInfo.hpp
   td/telegram/Photo.hpp
   td/telegram/PhotoSize.hpp
   td/telegram/PhotoSizeSource.hpp

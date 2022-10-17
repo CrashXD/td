@@ -14,10 +14,12 @@
 #include "td/telegram/DocumentsManager.h"
 #include "td/telegram/Global.h"
 #include "td/telegram/MessageEntity.h"
-#include "td/telegram/Payments.h"
+#include "td/telegram/misc.h"
+#include "td/telegram/PremiumGiftOption.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/telegram_api.h"
 #include "td/telegram/UpdatesManager.h"
+#include "td/telegram/UserId.h"
 
 #include "td/utils/algorithm.h"
 #include "td/utils/buffer.h"

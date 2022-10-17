@@ -10,7 +10,7 @@
 
 namespace td {
 
-constexpr int32 MTPROTO_LAYER = 145;
+constexpr int32 MTPROTO_LAYER = 147;
 
 enum class Version : int32 {
   Initial,  // 0
@@ -55,6 +55,7 @@ enum class Version : int32 {
   AddVoiceNoteFlags,
   AddMessageStickerFlags,  // 40
   AddStickerSetListFlags,
+  AddInputInvoiceFlags,
   Next
 };
 

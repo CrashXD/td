@@ -27,6 +27,7 @@
 #include "td/telegram/ConfigManager.h"
 #include "td/telegram/ContactsManager.h"
 #include "td/telegram/CountryInfoManager.h"
+#include "td/telegram/CustomEmojiId.h"
 #include "td/telegram/DeviceTokenManager.h"
 #include "td/telegram/DialogAction.h"
 #include "td/telegram/DialogEventLog.h"
@@ -41,6 +42,7 @@
 #include "td/telegram/DocumentsManager.h"
 #include "td/telegram/DownloadManager.h"
 #include "td/telegram/DownloadManagerCallback.h"
+#include "td/telegram/EmailVerification.h"
 #include "td/telegram/EmojiStatus.h"
 #include "td/telegram/FileReferenceManager.h"
 #include "td/telegram/files/FileGcParameters.h"
@@ -120,6 +122,7 @@
 #include "td/telegram/TopDialogCategory.h"
 #include "td/telegram/TopDialogManager.h"
 #include "td/telegram/UpdatesManager.h"
+#include "td/telegram/UserId.h"
 #include "td/telegram/Version.h"
 #include "td/telegram/VideoNotesManager.h"
 #include "td/telegram/VideosManager.h"
@@ -1986,14 +1989,14 @@ class GetScopeNotificationSettingsRequest final : public RequestActor<> {
 
 class GetStickersRequest final : public RequestActor<> {
   StickerType sticker_type_;
-  string emoji_;
+  string query_;
   int32 limit_;
   DialogId dialog_id_;
 
   vector<FileId> sticker_ids_;
 
   void do_run(Promise<Unit> &&promise) final {
-    sticker_ids_ = td_->stickers_manager_->get_stickers(sticker_type_, emoji_, limit_, dialog_id_, get_tries() < 2,
+    sticker_ids_ = td_->stickers_manager_->get_stickers(sticker_type_, query_, limit_, dialog_id_, get_tries() < 2,
                                                         std::move(promise));
   }
 
@@ -2002,11 +2005,11 @@ class GetStickersRequest final : public RequestActor<> {
   }
 
  public:
-  GetStickersRequest(ActorShared<Td> td, uint64 request_id, StickerType sticker_type, string &&emoji, int32 limit,
+  GetStickersRequest(ActorShared<Td> td, uint64 request_id, StickerType sticker_type, string &&query, int32 limit,
                      int64 dialog_id)
       : RequestActor(std::move(td), request_id)
       , sticker_type_(sticker_type)
-      , emoji_(std::move(emoji))
+      , query_(std::move(query))
       , limit_(limit)
       , dialog_id_(dialog_id) {
     set_tries(4);
@@ -3342,13 +3345,10 @@ void Td::clear() {
   close_flag_ = 2;
 
   Timer timer;
-  if (destroy_flag_) {
-    option_manager_->clear_options();
-    if (!auth_manager_->is_bot()) {
+  if (!auth_manager_->is_bot()) {
+    if (destroy_flag_) {
       notification_manager_->destroy_all_notifications();
-    }
-  } else {
-    if (!auth_manager_->is_bot()) {
+    } else {
       notification_manager_->flush_all_notifications();
     }
   }
@@ -3754,10 +3754,10 @@ void Td::init_connection_creator() {
   auto net_stats_manager = create_actor<NetStatsManager>("NetStatsManager", create_reference());
 
   // How else could I let two actor know about each other, without quite complex async logic?
-  auto net_stats_manager_ptr = net_stats_manager->get_actor_unsafe();
+  auto net_stats_manager_ptr = net_stats_manager.get_actor_unsafe();
   net_stats_manager_ptr->init();
-  connection_creator->get_actor_unsafe()->set_net_stats_callback(net_stats_manager_ptr->get_common_stats_callback(),
-                                                                 net_stats_manager_ptr->get_media_stats_callback());
+  connection_creator.get_actor_unsafe()->set_net_stats_callback(net_stats_manager_ptr->get_common_stats_callback(),
+                                                                net_stats_manager_ptr->get_media_stats_callback());
   G()->set_net_stats_file_callbacks(net_stats_manager_ptr->get_file_stats_callbacks());
 
   G()->set_connection_creator(std::move(connection_creator));
@@ -4009,7 +4009,7 @@ void Td::send_error_impl(uint64 id, tl_object_ptr<td_api::error> error) {
   auto it = request_set_.find(id);
   if (it != request_set_.end()) {
     if (error->code_ == 0 && error->message_ == "Lost promise") {
-      LOG(FATAL) << "Lost promise for query " << id << " of type " << it->second;
+      LOG(FATAL) << "Lost promise for query " << id << " of type " << it->second << " in close state " << close_flag_;
     }
     VLOG(td_requests) << "Sending error for request " << id << ": " << oneline(to_string(error));
     request_set_.erase(it);
@@ -4291,7 +4291,7 @@ void Td::on_request(uint64 id, const td_api::getCurrentState &request) {
 
     notification_manager_->get_current_state(updates);
 
-    config_manager_->get_actor_unsafe()->get_current_state(updates);
+    config_manager_.get_actor_unsafe()->get_current_state(updates);
 
     // TODO updateFileGenerationStart generation_id:int64 original_path:string destination_path:string conversion:string = Update;
     // TODO updateCall call:call = Update;
@@ -4708,7 +4708,13 @@ void Td::on_request(uint64 id, const td_api::rateSpeechRecognition &request) {
 }
 
 void Td::on_request(uint64 id, const td_api::getFile &request) {
-  send_closure(actor_id(this), &Td::send_result, id, file_manager_->get_file_object(FileId(request.file_id_, 0)));
+  auto file_object = file_manager_->get_file_object(FileId(request.file_id_, 0));
+  if (file_object->id_ == 0) {
+    file_object = nullptr;
+  } else {
+    file_object->id_ = request.file_id_;
+  }
+  send_closure(actor_id(this), &Td::send_result, id, std::move(file_object));
 }
 
 void Td::on_request(uint64 id, td_api::getRemoteFile &request) {
@@ -5200,6 +5206,21 @@ void Td::on_request(uint64 id, const td_api::getChatMessageCount &request) {
   });
   messages_manager_->get_dialog_message_count(DialogId(request.chat_id_), get_message_search_filter(request.filter_),
                                               request.return_local_, std::move(query_promise));
+}
+
+void Td::on_request(uint64 id, const td_api::getChatMessagePosition &request) {
+  CHECK_IS_USER();
+  CREATE_REQUEST_PROMISE();
+  auto query_promise = PromiseCreator::lambda([promise = std::move(promise)](Result<int32> result) mutable {
+    if (result.is_error()) {
+      promise.set_error(result.move_as_error());
+    } else {
+      promise.set_value(make_tl_object<td_api::count>(result.move_as_ok()));
+    }
+  });
+  messages_manager_->get_dialog_message_position({DialogId(request.chat_id_), MessageId(request.message_id_)},
+                                                 get_message_search_filter(request.filter_),
+                                                 MessageId(request.message_thread_id_), std::move(query_promise));
 }
 
 void Td::on_request(uint64 id, const td_api::getChatScheduledMessages &request) {
@@ -6395,11 +6416,12 @@ void Td::on_request(uint64 id, const td_api::downloadFile &request) {
   DownloadInfo *info = info_it == pending_file_downloads_.end() ? nullptr : &info_it->second;
   if (info != nullptr && (offset != info->offset || limit != info->limit)) {
     // we can't have two pending requests with different offset and limit, so cancel all previous requests
-    for (auto request_id : info->request_ids) {
+    auto request_ids = std::move(info->request_ids);
+    info->request_ids.clear();
+    for (auto request_id : request_ids) {
       send_closure(actor_id(this), &Td::send_error, request_id,
                    Status::Error(200, "Canceled by another downloadFile request"));
     }
-    info->request_ids.clear();
   }
   if (request.synchronous_) {
     if (info == nullptr) {
@@ -6409,10 +6431,12 @@ void Td::on_request(uint64 id, const td_api::downloadFile &request) {
     info->limit = limit;
     info->request_ids.push_back(id);
   }
-  file_manager_->download(file_id, download_file_callback_, priority, offset, limit);
+  Promise<td_api::object_ptr<td_api::file>> download_promise;
   if (!request.synchronous_) {
-    send_closure(actor_id(this), &Td::send_result, id, file_manager_->get_file_object(file_id, false));
+    CREATE_REQUEST_PROMISE();
+    download_promise = std::move(promise);
   }
+  file_manager_->download(file_id, download_file_callback_, priority, offset, limit, std::move(download_promise));
 }
 
 void Td::on_file_download_finished(FileId file_id) {
@@ -6457,8 +6481,8 @@ void Td::on_request(uint64 id, const td_api::getFileDownloadedPrefixSize &reques
 
 void Td::on_request(uint64 id, const td_api::cancelDownloadFile &request) {
   file_manager_->download(FileId(request.file_id_, 0), nullptr, request.only_if_pending_ ? -1 : 0,
-                          FileManager::KEEP_DOWNLOAD_OFFSET, FileManager::KEEP_DOWNLOAD_LIMIT);
-
+                          FileManager::KEEP_DOWNLOAD_OFFSET, FileManager::KEEP_DOWNLOAD_LIMIT,
+                          Promise<td_api::object_ptr<td_api::file>>());
   send_closure(actor_id(this), &Td::send_result, id, make_tl_object<td_api::ok>());
 }
 
@@ -6895,8 +6919,8 @@ void Td::on_request(uint64 id, td_api::closeSecretChat &request) {
 
 void Td::on_request(uint64 id, td_api::getStickers &request) {
   CHECK_IS_USER();
-  CLEAN_INPUT_STRING(request.emoji_);
-  CREATE_REQUEST(GetStickersRequest, get_sticker_type(request.sticker_type_), std::move(request.emoji_), request.limit_,
+  CLEAN_INPUT_STRING(request.query_);
+  CREATE_REQUEST(GetStickersRequest, get_sticker_type(request.sticker_type_), std::move(request.query_), request.limit_,
                  request.chat_id_);
 }
 
@@ -7107,9 +7131,11 @@ void Td::on_request(uint64 id, td_api::getEmojiSuggestionsUrl &request) {
   CREATE_REQUEST(GetEmojiSuggestionsUrlRequest, std::move(request.language_code_));
 }
 
-void Td::on_request(uint64 id, td_api::getCustomEmojiStickers &request) {
+void Td::on_request(uint64 id, const td_api::getCustomEmojiStickers &request) {
   CREATE_REQUEST_PROMISE();
-  stickers_manager_->get_custom_emoji_stickers(std::move(request.custom_emoji_ids_), true, std::move(promise));
+  stickers_manager_->get_custom_emoji_stickers(
+      transform(request.custom_emoji_ids_, [](int64 custom_emoji_id) { return CustomEmojiId(custom_emoji_id); }), true,
+      std::move(promise));
 }
 
 void Td::on_request(uint64 id, const td_api::getSavedAnimations &request) {
@@ -8185,7 +8211,7 @@ td_api::object_ptr<td_api::Object> Td::do_static_request(td_api::parseMarkdown &
   auto entities = r_entities.move_as_ok();
   auto status = fix_formatted_text(request.text_->text_, entities, true, true, true, true, true);
   if (status.is_error()) {
-    return make_error(400, status.error().message());
+    return make_error(400, status.message());
   }
 
   auto parsed_text = parse_markdown_v3({std::move(request.text_->text_), std::move(entities)});
@@ -8212,7 +8238,7 @@ td_api::object_ptr<td_api::Object> Td::do_static_request(td_api::getMarkdownText
   auto entities = r_entities.move_as_ok();
   auto status = fix_formatted_text(request.text_->text_, entities, true, true, true, true, true);
   if (status.is_error()) {
-    return make_error(400, status.error().message());
+    return make_error(400, status.message());
   }
 
   return get_formatted_text_object(get_markdown_v3({std::move(request.text_->text_), std::move(entities)}), false,

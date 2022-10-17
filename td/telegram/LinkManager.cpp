@@ -45,30 +45,6 @@ static bool is_valid_start_parameter(Slice start_parameter) {
   return start_parameter.size() <= 64 && is_base64url_characters(start_parameter);
 }
 
-static bool is_valid_username(Slice username) {
-  if (username.empty() || username.size() > 32) {
-    return false;
-  }
-  if (!is_alpha(username[0])) {
-    return false;
-  }
-  for (auto c : username) {
-    if (!is_alpha(c) && !is_digit(c) && c != '_') {
-      return false;
-    }
-  }
-  if (username.back() == '_') {
-    return false;
-  }
-  for (size_t i = 1; i < username.size(); i++) {
-    if (username[i - 1] == '_' && username[i] == '_') {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 static bool is_valid_phone_number(Slice phone_number) {
   if (phone_number.empty() || phone_number.size() > 32) {
     return false;
@@ -339,13 +315,15 @@ class LinkManager::InternalLinkGame final : public InternalLink {
 
 class LinkManager::InternalLinkInstantView final : public InternalLink {
   string url_;
+  string fallback_url_;
 
   td_api::object_ptr<td_api::InternalLinkType> get_internal_link_type_object() const final {
-    return td_api::make_object<td_api::internalLinkTypeInstantView>(url_);
+    return td_api::make_object<td_api::internalLinkTypeInstantView>(url_, fallback_url_);
   }
 
  public:
-  explicit InternalLinkInstantView(string url) : url_(std::move(url)) {
+  InternalLinkInstantView(string url, string fallback_url)
+      : url_(std::move(url)), fallback_url_(std::move(fallback_url)) {
   }
 };
 
@@ -975,7 +953,7 @@ unique_ptr<LinkManager::InternalLink> LinkManager::parse_internal_link(Slice lin
     case LinkType::TMe:
       return parse_t_me_link_query(info.query_, is_trusted);
     case LinkType::Telegraph:
-      return td::make_unique<InternalLinkInstantView>(PSTRING() << "https://telegra.ph" << info.query_);
+      return td::make_unique<InternalLinkInstantView>(PSTRING() << "https://telegra.ph" << info.query_, link.str());
     default:
       UNREACHABLE();
       return nullptr;
@@ -1364,8 +1342,8 @@ unique_ptr<LinkManager::InternalLink> LinkManager::parse_t_me_link_query(Slice q
   } else if (path[0] == "iv") {
     if (path.size() == 1 && has_arg("url")) {
       // /iv?url=<url>&rhash=<rhash>
-      return td::make_unique<InternalLinkInstantView>(PSTRING()
-                                                      << "https://t.me/iv" << copy_arg("url") << copy_arg("rhash"));
+      return td::make_unique<InternalLinkInstantView>(
+          PSTRING() << "https://t.me/iv" << copy_arg("url") << copy_arg("rhash"), get_arg("url"));
     }
   } else if (is_valid_username(path[0])) {
     if (path.size() >= 2 && to_integer<int64>(path[1]) > 0) {
@@ -1615,6 +1593,37 @@ string LinkManager::get_dialog_invite_link(Slice hash, bool is_internal) {
   }
 }
 
+string LinkManager::get_instant_view_link_url(Slice link) {
+  auto link_info = get_link_info(link);
+  if (link_info.type_ != LinkType::TMe) {
+    return string();
+  }
+  const auto url_query = parse_url_query(link_info.query_);
+  const auto &path = url_query.path_;
+  if (path.size() == 1 && path[0] == "iv") {
+    return url_query.get_arg("url").str();
+  }
+  return string();
+}
+
+string LinkManager::get_instant_view_link_rhash(Slice link) {
+  auto link_info = get_link_info(link);
+  if (link_info.type_ != LinkType::TMe) {
+    return string();
+  }
+  const auto url_query = parse_url_query(link_info.query_);
+  const auto &path = url_query.path_;
+  if (path.size() == 1 && path[0] == "iv" && !url_query.get_arg("url").empty()) {
+    return url_query.get_arg("rhash").str();
+  }
+  return string();
+}
+
+string LinkManager::get_instant_view_link(Slice url, Slice rhash) {
+  return PSTRING() << G()->get_option_string("t_me_url", "https://t.me/") << "iv?url=" << url_encode(url)
+                   << "&rhash=" << url_encode(rhash);
+}
+
 UserId LinkManager::get_link_user_id(Slice url) {
   string lower_cased_url = to_lower(url);
   url = lower_cased_url;
@@ -1657,7 +1666,7 @@ UserId LinkManager::get_link_user_id(Slice url) {
   return UserId();
 }
 
-Result<int64> LinkManager::get_link_custom_emoji_document_id(Slice url) {
+Result<CustomEmojiId> LinkManager::get_link_custom_emoji_id(Slice url) {
   string lower_cased_url = to_lower(url);
   url = lower_cased_url;
 
@@ -1693,7 +1702,7 @@ Result<int64> LinkManager::get_link_custom_emoji_document_id(Slice url) {
       if (r_document_id.is_error() || r_document_id.ok() == 0) {
         return Status::Error(400, "Invalid custom emoji identifier specified");
       }
-      return r_document_id.ok();
+      return CustomEmojiId(r_document_id.ok());
     }
   }
   return Status::Error(400, "Custom emoji URL must have an emoji identifier");

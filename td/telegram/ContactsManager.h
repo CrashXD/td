@@ -13,6 +13,7 @@
 #include "td/telegram/ChannelType.h"
 #include "td/telegram/ChatId.h"
 #include "td/telegram/Contact.h"
+#include "td/telegram/CustomEmojiId.h"
 #include "td/telegram/DialogAdministrator.h"
 #include "td/telegram/DialogId.h"
 #include "td/telegram/DialogInviteLink.h"
@@ -126,13 +127,12 @@ class ContactsManager final : public Actor {
 
   string get_dialog_about(DialogId dialog_id);
 
-  bool is_update_about_username_change_received(UserId user_id) const;
+  string get_dialog_search_text(DialogId dialog_id) const;
 
   void for_each_secret_chat_with_user(UserId user_id, const std::function<void(SecretChatId)> &f);
 
   string get_user_username(UserId user_id) const;
   string get_channel_username(ChannelId channel_id) const;
-  string get_secret_chat_username(SecretChatId secret_chat_id) const;
 
   int32 get_secret_chat_date(SecretChatId secret_chat_id) const;
   int32 get_secret_chat_ttl(SecretChatId secret_chat_id) const;
@@ -546,6 +546,7 @@ class ContactsManager final : public Actor {
   int32 get_channel_date(ChannelId channel_id) const;
   DialogParticipantStatus get_channel_status(ChannelId channel_id) const;
   DialogParticipantStatus get_channel_permissions(ChannelId channel_id) const;
+  bool get_channel_is_verified(ChannelId channel_id) const;
   int32 get_channel_participant_count(ChannelId channel_id) const;
   bool get_channel_sign_messages(ChannelId channel_id) const;
   bool get_channel_has_linked_channel(ChannelId channel_id) const;
@@ -646,7 +647,7 @@ class ContactsManager final : public Actor {
     string phone_number;
     int64 access_hash = -1;
     EmojiStatus emoji_status;
-    int64 last_sent_emoji_status = 0;
+    CustomEmojiId last_sent_emoji_status;
 
     ProfilePhoto photo;
 
@@ -1237,6 +1238,9 @@ class ContactsManager final : public Actor {
 
   SecretChat *add_secret_chat(SecretChatId secret_chat_id);
 
+  string get_user_search_text(UserId user_id) const;
+  static string get_user_search_text(const User *u);
+
   static DialogParticipantStatus get_chat_status(const Chat *c);
   DialogParticipantStatus get_chat_permissions(const Chat *c) const;
 
@@ -1249,9 +1253,12 @@ class ContactsManager final : public Actor {
   static bool get_channel_join_to_send(const Channel *c);
   static bool get_channel_join_request(const Channel *c);
 
+  string get_channel_search_text(ChannelId channel_id) const;
+  static string get_channel_search_text(const Channel *c);
+
   void set_my_id(UserId my_id);
 
-  static bool is_valid_username(const string &username);
+  static bool is_allowed_username(const string &username);
 
   void on_set_emoji_status(EmojiStatus emoji_status, Promise<Unit> &&promise);
 

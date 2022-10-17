@@ -30,13 +30,14 @@
 #include "td/telegram/MessageId.h"
 #include "td/telegram/MessagesManager.h"
 #include "td/telegram/MessageTtl.h"
+#include "td/telegram/misc.h"
 #include "td/telegram/net/DcOptions.h"
 #include "td/telegram/net/NetQuery.h"
 #include "td/telegram/NotificationManager.h"
 #include "td/telegram/NotificationSettings.h"
 #include "td/telegram/NotificationSettingsManager.h"
 #include "td/telegram/OptionManager.h"
-#include "td/telegram/Payments.h"
+#include "td/telegram/OrderInfo.h"
 #include "td/telegram/PollId.h"
 #include "td/telegram/PollManager.h"
 #include "td/telegram/PrivacyManager.h"
@@ -991,8 +992,14 @@ void UpdatesManager::on_get_updates(tl_object_ptr<telegram_api::Updates> &&updat
     }
     case telegram_api::updates::ID: {
       auto updates = move_tl_object_as<telegram_api::updates>(updates_ptr);
-      td_->contacts_manager_->on_get_users(std::move(updates->users_), "updates");
-      td_->contacts_manager_->on_get_chats(std::move(updates->chats_), "updates");
+      string source_str;
+      const char *source = "updates";
+      if (updates->updates_.size() == 1 && updates->updates_[0] != nullptr) {
+        source_str = PSTRING() << "update " << updates->updates_[0]->get_id();
+        source = source_str.c_str();
+      }
+      td_->contacts_manager_->on_get_users(std::move(updates->users_), source);
+      td_->contacts_manager_->on_get_chats(std::move(updates->chats_), source);
       on_pending_updates(std::move(updates->updates_), updates->seq_, updates->seq_, updates->date_, Time::now(),
                          std::move(promise), "telegram_api::updates");
       break;
@@ -3517,6 +3524,13 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateLangPack> updat
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateGeoLiveViewed> update, Promise<Unit> &&promise) {
   td_->messages_manager_->on_update_live_location_viewed(
       {DialogId(update->peer_), MessageId(ServerMessageId(update->msg_id_))});
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateMessageExtendedMedia> update,
+                               Promise<Unit> &&promise) {
+  td_->messages_manager_->on_update_message_extended_media(
+      {DialogId(update->peer_), MessageId(ServerMessageId(update->msg_id_))}, std::move(update->extended_media_));
   promise.set_value(Unit());
 }
 

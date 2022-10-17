@@ -5071,6 +5071,49 @@ string ContactsManager::get_dialog_about(DialogId dialog_id) {
   return string();
 }
 
+string ContactsManager::get_dialog_search_text(DialogId dialog_id) const {
+  switch (dialog_id.get_type()) {
+    case DialogType::User:
+      return get_user_search_text(dialog_id.get_user_id());
+    case DialogType::Chat:
+      return get_chat_title(dialog_id.get_chat_id());
+    case DialogType::Channel:
+      return get_channel_search_text(dialog_id.get_channel_id());
+    case DialogType::SecretChat:
+      return get_user_search_text(get_secret_chat_user_id(dialog_id.get_secret_chat_id()));
+    case DialogType::None:
+    default:
+      UNREACHABLE();
+  }
+  return string();
+}
+
+string ContactsManager::get_user_search_text(UserId user_id) const {
+  auto u = get_user(user_id);
+  if (u == nullptr) {
+    return string();
+  }
+  return get_user_search_text(u);
+}
+
+string ContactsManager::get_user_search_text(const User *u) {
+  CHECK(u != nullptr);
+  return PSTRING() << u->first_name << ' ' << u->last_name << ' ' << u->username;
+}
+
+string ContactsManager::get_channel_search_text(ChannelId channel_id) const {
+  auto c = get_channel(channel_id);
+  if (c == nullptr) {
+    return get_channel_title(channel_id);
+  }
+  return get_channel_search_text(c);
+}
+
+string ContactsManager::get_channel_search_text(const Channel *c) {
+  CHECK(c != nullptr);
+  return PSTRING() << c->title << ' ' << c->username;
+}
+
 int32 ContactsManager::get_secret_chat_date(SecretChatId secret_chat_id) const {
   auto c = get_secret_chat(secret_chat_id);
   if (c == nullptr) {
@@ -5097,14 +5140,6 @@ string ContactsManager::get_user_username(UserId user_id) const {
     return string();
   }
   return u->username;
-}
-
-string ContactsManager::get_secret_chat_username(SecretChatId secret_chat_id) const {
-  auto c = get_secret_chat(secret_chat_id);
-  if (c == nullptr) {
-    return string();
-  }
-  return get_user_username(c->user_id);
 }
 
 string ContactsManager::get_channel_username(ChannelId channel_id) const {
@@ -5318,7 +5353,7 @@ void ContactsManager::check_dialog_username(DialogId dialog_id, const string &us
   if (username.empty()) {
     return promise.set_value(CheckDialogUsernameResult::Ok);
   }
-  if (!is_valid_username(username)) {
+  if (!is_allowed_username(username)) {
     return promise.set_value(CheckDialogUsernameResult::Invalid);
   }
 
@@ -5374,29 +5409,18 @@ td_api::object_ptr<td_api::CheckChatUsernameResult> ContactsManager::get_check_c
   }
 }
 
-bool ContactsManager::is_valid_username(const string &username) {
-  if (username.size() < 5 || username.size() > 32) {
+bool ContactsManager::is_allowed_username(const string &username) {
+  if (!is_valid_username(username)) {
     return false;
   }
-  if (!is_alpha(username[0])) {
+  if (username.size() < 5) {
     return false;
   }
-  for (auto c : username) {
-    if (!is_alpha(c) && !is_digit(c) && c != '_') {
-      return false;
-    }
-  }
-  if (username.back() == '_') {
-    return false;
-  }
-  for (size_t i = 1; i < username.size(); i++) {
-    if (username[i - 1] == '_' && username[i] == '_') {
-      return false;
-    }
-  }
-  if (username.find("admin") == 0 || username.find("telegram") == 0 || username.find("support") == 0 ||
-      username.find("security") == 0 || username.find("settings") == 0 || username.find("contacts") == 0 ||
-      username.find("service") == 0 || username.find("telegraph") == 0) {
+  auto username_lowered = to_lower(username);
+  if (username_lowered.find("admin") == 0 || username_lowered.find("telegram") == 0 ||
+      username_lowered.find("support") == 0 || username_lowered.find("security") == 0 ||
+      username_lowered.find("settings") == 0 || username_lowered.find("contacts") == 0 ||
+      username_lowered.find("service") == 0 || username_lowered.find("telegraph") == 0) {
     return false;
   }
   return true;
@@ -6617,7 +6641,7 @@ void ContactsManager::on_update_profile_success(int32 flags, const string &first
 }
 
 void ContactsManager::set_username(const string &username, Promise<Unit> &&promise) {
-  if (!username.empty() && !is_valid_username(username)) {
+  if (!username.empty() && !is_allowed_username(username)) {
     return promise.set_error(Status::Error(400, "Username is invalid"));
   }
   td_->create_handler<UpdateUsernameQuery>(std::move(promise))->send(username);
@@ -6671,7 +6695,7 @@ void ContactsManager::set_channel_username(ChannelId channel_id, const string &u
     return promise.set_error(Status::Error(400, "Not enough rights to change supergroup username"));
   }
 
-  if (!username.empty() && !is_valid_username(username)) {
+  if (!username.empty() && !is_allowed_username(username)) {
     return promise.set_error(Status::Error(400, "Username is invalid"));
   }
 
@@ -8710,7 +8734,7 @@ void ContactsManager::on_get_user(tl_object_ptr<telegram_api::User> &&user_ptr, 
 
     User *u = get_user_force(user_id);
     if (u == nullptr && Slice(source) != Slice("GetUsersQuery")) {
-      // userEmpty should be received only through getUsers for unexisting users
+      // userEmpty should be received only through getUsers for nonexistent users
       LOG(ERROR) << "Have no information about " << user_id << ", but received userEmpty from " << source;
     }
     return;
@@ -10397,7 +10421,7 @@ void ContactsManager::update_user(User *u, UserId user_id, bool from_binlog, boo
   } else {
     u->need_save_to_database = true;
   }
-  if (u->last_sent_emoji_status != 0) {
+  if (u->last_sent_emoji_status.is_valid()) {
     auto until_date = u->emoji_status.get_until_date();
     auto left_time = until_date - unix_time;
     if (left_time >= 0 && left_time < 30 * 86400) {
@@ -11632,15 +11656,6 @@ void ContactsManager::on_get_channel_full_failed(ChannelId channel_id) {
   auto channel_full = get_channel_full(channel_id, true, "on_get_channel_full");
   if (channel_full != nullptr) {
     channel_full->repair_request_version = 0;
-  }
-}
-
-bool ContactsManager::is_update_about_username_change_received(UserId user_id) const {
-  const User *u = get_user(user_id);
-  if (u != nullptr) {
-    return u->is_contact;
-  } else {
-    return false;
   }
 }
 
@@ -14524,7 +14539,7 @@ void ContactsManager::update_contacts_hints(const User *u, UserId user_id, bool 
 
   int64 key = user_id.get();
   string old_value = contacts_hints_.key_to_string(key);
-  string new_value = is_contact ? (PSTRING() << u->first_name << ' ' << u->last_name << ' ' << u->username) : string();
+  string new_value = is_contact ? get_user_search_text(u) : string();
 
   if (new_value != old_value) {
     if (is_contact) {
@@ -14915,10 +14930,11 @@ FileSourceId ContactsManager::get_user_full_file_source_id(UserId user_id) {
     return FileSourceId();
   }
 
-  if (get_user_full(user_id) != nullptr) {
+  auto user_full = get_user_full(user_id);
+  if (user_full != nullptr) {
     VLOG(file_references) << "Don't need to create file source for full " << user_id;
     // user full was already added, source ID was registered and shouldn't be needed
-    return FileSourceId();
+    return user_full->is_update_user_full_sent ? FileSourceId() : user_full->file_source_id;
   }
 
   auto &source_id = user_full_file_source_ids_[user_id];
@@ -14934,10 +14950,11 @@ FileSourceId ContactsManager::get_chat_full_file_source_id(ChatId chat_id) {
     return FileSourceId();
   }
 
-  if (get_chat_full(chat_id) != nullptr) {
+  auto chat_full = get_chat_full(chat_id);
+  if (chat_full != nullptr) {
     VLOG(file_references) << "Don't need to create file source for full " << chat_id;
     // chat full was already added, source ID was registered and shouldn't be needed
-    return FileSourceId();
+    return chat_full->is_update_chat_full_sent ? FileSourceId() : chat_full->file_source_id;
   }
 
   auto &source_id = chat_full_file_source_ids_[chat_id];
@@ -14953,10 +14970,11 @@ FileSourceId ContactsManager::get_channel_full_file_source_id(ChannelId channel_
     return FileSourceId();
   }
 
-  if (get_channel_full(channel_id) != nullptr) {
+  auto channel_full = get_channel_full(channel_id);
+  if (channel_full != nullptr) {
     VLOG(file_references) << "Don't need to create file source for full " << channel_id;
     // channel full was already added, source ID was registered and shouldn't be needed
-    return FileSourceId();
+    return channel_full->is_update_channel_full_sent ? FileSourceId() : channel_full->file_source_id;
   }
 
   auto &source_id = channel_full_file_source_ids_[channel_id];
@@ -15261,6 +15279,14 @@ int32 ContactsManager::get_channel_participant_count(ChannelId channel_id) const
     return 0;
   }
   return c->participant_count;
+}
+
+bool ContactsManager::get_channel_is_verified(ChannelId channel_id) const {
+  auto c = get_channel(channel_id);
+  if (c == nullptr) {
+    return false;
+  }
+  return c->is_verified;
 }
 
 bool ContactsManager::get_channel_sign_messages(ChannelId channel_id) const {
@@ -15614,7 +15640,7 @@ std::pair<int32, vector<DialogId>> ContactsManager::search_among_dialogs(const v
       if (query.empty()) {
         hints.add(dialog_id.get(), Slice(" "));
       } else {
-        hints.add(dialog_id.get(), PSLICE() << u->first_name << ' ' << u->last_name << ' ' << u->username);
+        hints.add(dialog_id.get(), get_user_search_text(u));
       }
       rating = -get_user_was_online(u, user_id);
     } else {
@@ -15624,7 +15650,7 @@ std::pair<int32, vector<DialogId>> ContactsManager::search_among_dialogs(const v
       if (query.empty()) {
         hints.add(dialog_id.get(), Slice(" "));
       } else {
-        hints.add(dialog_id.get(), td_->messages_manager_->get_dialog_title(dialog_id));
+        hints.add(dialog_id.get(), get_dialog_search_text(dialog_id));
       }
     }
     hints.set_rating(dialog_id.get(), rating);
@@ -16806,7 +16832,7 @@ td_api::object_ptr<td_api::updateUser> ContactsManager::get_update_unknown_user_
 
 int64 ContactsManager::get_user_id_object(UserId user_id, const char *source) const {
   if (user_id.is_valid() && get_user(user_id) == nullptr && unknown_users_.count(user_id) == 0) {
-    LOG(ERROR) << "Have no info about " << user_id << " from " << source;
+    LOG(ERROR) << "Have no information about " << user_id << " from " << source;
     unknown_users_.insert(user_id);
     send_closure(G()->td(), &Td::send_update, get_update_unknown_user_object(user_id));
   }
@@ -16832,7 +16858,7 @@ tl_object_ptr<td_api::user> ContactsManager::get_user_object(UserId user_id, con
     type = make_tl_object<td_api::userTypeRegular>();
   }
 
-  auto emoji_status = u->last_sent_emoji_status != 0 ? u->emoji_status.get_emoji_status_object() : nullptr;
+  auto emoji_status = u->last_sent_emoji_status.is_valid() ? u->emoji_status.get_emoji_status_object() : nullptr;
   return make_tl_object<td_api::user>(
       user_id.get(), u->first_name, u->last_name, u->username, u->phone_number, get_user_status_object(user_id, u),
       get_profile_photo_object(td_->file_manager_.get(), u->photo), std::move(emoji_status), u->is_contact,
@@ -16914,7 +16940,7 @@ td_api::object_ptr<td_api::updateBasicGroup> ContactsManager::get_update_unknown
 
 int64 ContactsManager::get_basic_group_id_object(ChatId chat_id, const char *source) const {
   if (chat_id.is_valid() && get_chat(chat_id) == nullptr && unknown_chats_.count(chat_id) == 0) {
-    LOG(ERROR) << "Have no info about " << chat_id << " from " << source;
+    LOG(ERROR) << "Have no information about " << chat_id << " from " << source;
     unknown_chats_.insert(chat_id);
     send_closure(G()->td(), &Td::send_update, get_update_unknown_basic_group_object(chat_id));
   }
@@ -16973,7 +16999,7 @@ int64 ContactsManager::get_supergroup_id_object(ChannelId channel_id, const char
     if (have_min_channel(channel_id)) {
       LOG(INFO) << "Have only min " << channel_id << " received from " << source;
     } else {
-      LOG(ERROR) << "Have no info about " << channel_id << " received from " << source;
+      LOG(ERROR) << "Have no information about " << channel_id << " received from " << source;
     }
     unknown_channels_.insert(channel_id);
     send_closure(G()->td(), &Td::send_update, get_update_unknown_supergroup_object(channel_id));
@@ -17047,7 +17073,7 @@ td_api::object_ptr<td_api::updateSecretChat> ContactsManager::get_update_unknown
 int32 ContactsManager::get_secret_chat_id_object(SecretChatId secret_chat_id, const char *source) const {
   if (secret_chat_id.is_valid() && get_secret_chat(secret_chat_id) == nullptr &&
       unknown_secret_chats_.count(secret_chat_id) == 0) {
-    LOG(ERROR) << "Have no info about " << secret_chat_id << " from " << source;
+    LOG(ERROR) << "Have no information about " << secret_chat_id << " from " << source;
     unknown_secret_chats_.insert(secret_chat_id);
     send_closure(G()->td(), &Td::send_update, get_update_unknown_secret_chat_object(secret_chat_id));
   }

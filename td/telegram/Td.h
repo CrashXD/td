@@ -93,7 +93,7 @@ extern int VERBOSITY_NAME(td_requests);
 // It happens after "hangup".
 //
 // Parent needs a way to know that it will receive no more updates.
-// It happens after destruction of callback or after on_closed.
+// It happens after destruction of callback
 class Td final : public Actor {
  public:
   Td(const Td &) = delete;
@@ -196,8 +196,8 @@ class Td final : public Actor {
   ActorOwn<NetStatsManager> net_stats_manager_;
   ActorOwn<PasswordManager> password_manager_;
   ActorOwn<PrivacyManager> privacy_manager_;
-  ActorOwn<SecureManager> secure_manager_;
   ActorOwn<SecretChatsManager> secret_chats_manager_;
+  ActorOwn<SecureManager> secure_manager_;
   ActorOwn<StateManager> state_manager_;
   ActorOwn<StorageManager> storage_manager_;
   ActorOwn<PhoneNumberManager> verify_phone_number_manager_;
@@ -653,6 +653,8 @@ class Td final : public Actor {
   void on_request(uint64 id, const td_api::getChatSparseMessagePositions &request);
 
   void on_request(uint64 id, const td_api::getChatMessageCount &request);
+
+  void on_request(uint64 id, const td_api::getChatMessagePosition &request);
 
   void on_request(uint64 id, const td_api::getChatScheduledMessages &request);
 
@@ -1144,7 +1146,7 @@ class Td final : public Actor {
 
   void on_request(uint64 id, td_api::getEmojiSuggestionsUrl &request);
 
-  void on_request(uint64 id, td_api::getCustomEmojiStickers &request);
+  void on_request(uint64 id, const td_api::getCustomEmojiStickers &request);
 
   void on_request(uint64 id, const td_api::getFavoriteStickers &request);
 
