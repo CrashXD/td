@@ -8,15 +8,23 @@
 
 #include "td/utils/port/FileFd.h"
 #include "td/utils/port/path.h"
+#include "td/utils/port/sleep.h"
+#include "td/utils/port/StdStreams.h"
 #include "td/utils/SliceBuilder.h"
+#include "td/utils/Time.h"
 
 namespace td {
 
-Status AsyncFileLog::init(string path, int64 rotate_threshold) {
+#if !TD_THREAD_UNSUPPORTED
+
+Status AsyncFileLog::init(string path, int64 rotate_threshold, bool redirect_stderr) {
   CHECK(path_.empty());
   CHECK(!path.empty());
 
   TRY_RESULT(fd, FileFd::open(path, FileFd::Create | FileFd::Write | FileFd::Append));
+  if (!Stderr().empty() && redirect_stderr) {
+    fd.get_native_fd().duplicate(Stderr().get_native_fd()).ignore();
+  }
 
   auto r_path = realpath(path, true);
   if (r_path.is_error()) {
@@ -29,16 +37,18 @@ Status AsyncFileLog::init(string path, int64 rotate_threshold) {
   queue_ = td::make_unique<MpscPollableQueue<Query>>();
   queue_->init();
 
-  logging_thread_ =
-      td::thread([queue = queue_.get(), fd = std::move(fd), path = path_, size, rotate_threshold]() mutable {
+  logging_thread_ = td::thread(
+      [queue = queue_.get(), fd = std::move(fd), path = path_, size, rotate_threshold, redirect_stderr]() mutable {
         auto after_rotation = [&] {
-          ScopedDisableLog disable_log;  // to ensure that nothing will be printed to the closed log
           fd.close();
-          auto r_fd = FileFd::open(path, FileFd::Create | FileFd::Truncate | FileFd::Write);
+          auto r_fd = FileFd::open(path, FileFd::Create | FileFd::Write | FileFd::Append);
           if (r_fd.is_error()) {
             process_fatal_error(PSLICE() << r_fd.error() << " in " << __FILE__ << " at " << __LINE__ << '\n');
           }
           fd = r_fd.move_as_ok();
+          if (!Stderr().empty() && redirect_stderr) {
+            fd.get_native_fd().duplicate(Stderr().get_native_fd()).ignore();
+          }
           size = 0;
         };
         auto append = [&](CSlice slice) {
@@ -50,6 +60,11 @@ Status AsyncFileLog::init(string path, int64 rotate_threshold) {
             after_rotation();
           }
           while (!slice.empty()) {
+            if (redirect_stderr) {
+              while (has_log_guard()) {
+                // spin
+              }
+            }
             auto r_size = fd.write(slice);
             if (r_size.is_error()) {
               process_fatal_error(PSLICE() << r_size.error() << " in " << __FILE__ << " at " << __LINE__ << '\n');
@@ -130,6 +145,16 @@ void AsyncFileLog::do_append(int log_level, CSlice slice) {
     process_fatal_error("AsyncFileLog is not inited");
   }
   queue_->writer_put(std::move(query));
+  if (log_level == VERBOSITY_NAME(FATAL)) {
+    // it is not thread-safe to join logging_thread_ there, so just wait for the log line to be printed
+    auto end_time = Time::now() + 1.0;
+    while (!queue_->is_empty() && Time::now() < end_time) {
+      usleep_for(1000);
+    }
+    usleep_for(5000);  // allow some time for the log line to be actually printed
+  }
 }
+
+#endif
 
 }  // namespace td

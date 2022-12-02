@@ -6,7 +6,7 @@ if (POLICY CMP0065)
   cmake_policy(SET CMP0065 NEW)
 endif()
 
-project(TDLib VERSION 1.8.7 LANGUAGES CXX C)
+project(TDLib VERSION 1.8.8 LANGUAGES CXX C)
 
 if (NOT DEFINED CMAKE_MODULE_PATH)
   set(CMAKE_MODULE_PATH "")
@@ -320,6 +320,7 @@ set(TDLIB_SOURCE
   td/telegram/DialogId.cpp
   td/telegram/DialogInviteLink.cpp
   td/telegram/DialogLocation.cpp
+  td/telegram/DialogNotificationSettings.cpp
   td/telegram/DialogParticipant.cpp
   td/telegram/DialogParticipantFilter.cpp
   td/telegram/DialogSource.cpp
@@ -351,6 +352,11 @@ set(TDLIB_SOURCE
   td/telegram/files/FileUploader.cpp
   td/telegram/files/PartsManager.cpp
   td/telegram/files/ResourceManager.cpp
+  td/telegram/ForumTopic.cpp
+  td/telegram/ForumTopicEditedData.cpp
+  td/telegram/ForumTopicIcon.cpp
+  td/telegram/ForumTopicInfo.cpp
+  td/telegram/ForumTopicManager.cpp
   td/telegram/Game.cpp
   td/telegram/GameManager.cpp
   td/telegram/Global.cpp
@@ -372,15 +378,17 @@ set(TDLIB_SOURCE
   td/telegram/Logging.cpp
   td/telegram/MessageContent.cpp
   td/telegram/MessageContentType.cpp
+  td/telegram/MessageDb.cpp
   td/telegram/MessageEntity.cpp
   td/telegram/MessageExtendedMedia.cpp
   td/telegram/MessageId.cpp
   td/telegram/MessageReaction.cpp
+  td/telegram/MessageReplyHeader.cpp
   td/telegram/MessageReplyInfo.cpp
-  td/telegram/MessagesDb.cpp
   td/telegram/MessageSearchFilter.cpp
   td/telegram/MessageSender.cpp
   td/telegram/MessagesManager.cpp
+  td/telegram/MessageThreadDb.cpp
   td/telegram/MessageTtl.cpp
   td/telegram/misc.cpp
   td/telegram/net/AuthDataShared.cpp
@@ -403,7 +411,7 @@ set(TDLIB_SOURCE
   td/telegram/net/SessionMultiProxy.cpp
   td/telegram/NewPasswordState.cpp
   td/telegram/NotificationManager.cpp
-  td/telegram/NotificationSettings.cpp
+  td/telegram/NotificationSettingsScope.cpp
   td/telegram/NotificationSettingsManager.cpp
   td/telegram/NotificationSound.cpp
   td/telegram/NotificationType.cpp
@@ -424,6 +432,7 @@ set(TDLIB_SOURCE
   td/telegram/ReplyMarkup.cpp
   td/telegram/ReportReason.cpp
   td/telegram/RestrictionReason.cpp
+  td/telegram/ScopeNotificationSettings.cpp
   td/telegram/SecretChatActor.cpp
   td/telegram/SecretChatDb.cpp
   td/telegram/SecretChatsManager.cpp
@@ -449,7 +458,9 @@ set(TDLIB_SOURCE
   td/telegram/ThemeManager.cpp
   td/telegram/TopDialogCategory.cpp
   td/telegram/TopDialogManager.cpp
+  td/telegram/TranscriptionInfo.cpp
   td/telegram/UpdatesManager.cpp
+  td/telegram/Usernames.cpp
   td/telegram/Venue.cpp
   td/telegram/VideoNotesManager.cpp
   td/telegram/VideosManager.cpp
@@ -535,6 +546,7 @@ set(TDLIB_SOURCE
   td/telegram/DialogInviteLink.h
   td/telegram/DialogListId.h
   td/telegram/DialogLocation.h
+  td/telegram/DialogNotificationSettings.h
   td/telegram/DialogParticipant.h
   td/telegram/DialogParticipantFilter.h
   td/telegram/DialogSource.h
@@ -575,6 +587,11 @@ set(TDLIB_SOURCE
   td/telegram/files/ResourceManager.h
   td/telegram/files/ResourceState.h
   td/telegram/FolderId.h
+  td/telegram/ForumTopic.h
+  td/telegram/ForumTopicEditedData.h
+  td/telegram/ForumTopicIcon.h
+  td/telegram/ForumTopicInfo.h
+  td/telegram/ForumTopicManager.h
   td/telegram/FullMessageId.h
   td/telegram/Game.h
   td/telegram/GameManager.h
@@ -603,17 +620,19 @@ set(TDLIB_SOURCE
   td/telegram/MessageContent.h
   td/telegram/MessageContentType.h
   td/telegram/MessageCopyOptions.h
+  td/telegram/MessageDb.h
   td/telegram/MessageEntity.h
   td/telegram/MessageExtendedMedia.h
   td/telegram/MessageId.h
   td/telegram/MessageLinkInfo.h
   td/telegram/MessageReaction.h
+  td/telegram/MessageReplyHeader.h
   td/telegram/MessageReplyInfo.h
-  td/telegram/MessageThreadInfo.h
-  td/telegram/MessagesDb.h
   td/telegram/MessageSearchFilter.h
   td/telegram/MessageSender.h
   td/telegram/MessagesManager.h
+  td/telegram/MessageThreadDb.h
+  td/telegram/MessageThreadInfo.h
   td/telegram/MessageTtl.h
   td/telegram/MinChannel.h
   td/telegram/misc.h
@@ -647,7 +666,7 @@ set(TDLIB_SOURCE
   td/telegram/NotificationGroupType.h
   td/telegram/NotificationId.h
   td/telegram/NotificationManager.h
-  td/telegram/NotificationSettings.h
+  td/telegram/NotificationSettingsScope.h
   td/telegram/NotificationSettingsManager.h
   td/telegram/NotificationSound.h
   td/telegram/NotificationSoundType.h
@@ -675,6 +694,7 @@ set(TDLIB_SOURCE
   td/telegram/RequestActor.h
   td/telegram/RestrictionReason.h
   td/telegram/ScheduledServerMessageId.h
+  td/telegram/ScopeNotificationSettings.h
   td/telegram/SecretChatActor.h
   td/telegram/SecretChatId.h
   td/telegram/SecretChatDb.h
@@ -707,9 +727,11 @@ set(TDLIB_SOURCE
   td/telegram/ThemeManager.h
   td/telegram/TopDialogCategory.h
   td/telegram/TopDialogManager.h
+  td/telegram/TranscriptionInfo.h
   td/telegram/UniqueId.h
   td/telegram/UpdatesManager.h
   td/telegram/UserId.h
+  td/telegram/Usernames.h
   td/telegram/Venue.h
   td/telegram/Version.h
   td/telegram/VideoNotesManager.h
@@ -723,6 +745,7 @@ set(TDLIB_SOURCE
   td/telegram/AudiosManager.hpp
   td/telegram/AuthManager.hpp
   td/telegram/BackgroundType.hpp
+  td/telegram/DialogNotificationSettings.hpp
   td/telegram/DialogFilter.hpp
   td/telegram/Dimensions.hpp
   td/telegram/Document.hpp
@@ -734,6 +757,8 @@ set(TDLIB_SOURCE
   td/telegram/files/FileLocation.hpp
   td/telegram/files/FileManager.hpp
   td/telegram/files/FileSourceId.hpp
+  td/telegram/ForumTopicEditedData.hpp
+  td/telegram/ForumTopicIcon.hpp
   td/telegram/Game.hpp
   td/telegram/InputInvoice.hpp
   td/telegram/InputMessageText.hpp
@@ -742,7 +767,6 @@ set(TDLIB_SOURCE
   td/telegram/MessageReaction.hpp
   td/telegram/MessageReplyInfo.hpp
   td/telegram/MinChannel.hpp
-  td/telegram/NotificationSettings.hpp
   td/telegram/OrderInfo.hpp
   td/telegram/Photo.hpp
   td/telegram/PhotoSize.hpp
@@ -751,10 +775,12 @@ set(TDLIB_SOURCE
   td/telegram/PollManager.hpp
   td/telegram/PremiumGiftOption.hpp
   td/telegram/ReplyMarkup.hpp
+  td/telegram/ScopeNotificationSettings.hpp
   td/telegram/SecureValue.hpp
   td/telegram/SendCodeHelper.hpp
   td/telegram/StickerSetId.hpp
   td/telegram/StickersManager.hpp
+  td/telegram/TranscriptionInfo.hpp
   td/telegram/VideoNotesManager.hpp
   td/telegram/VideosManager.hpp
   td/telegram/VoiceNotesManager.hpp

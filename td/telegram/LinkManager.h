@@ -60,7 +60,7 @@ class LinkManager final : public Actor {
   static unique_ptr<InternalLink> parse_internal_link(Slice link, bool is_trusted = false);
 
   void update_autologin_domains(string autologin_token, vector<string> autologin_domains,
-                                vector<string> url_auth_domains);
+                                vector<string> url_auth_domains, vector<string> whitelisted_domains);
 
   void get_deep_link_info(Slice link, Promise<td_api::object_ptr<td_api::deepLinkInfo>> &&promise);
 
@@ -74,6 +74,9 @@ class LinkManager final : public Actor {
 
   void get_link_login_url(const string &url, bool allow_write_access,
                           Promise<td_api::object_ptr<td_api::httpUrl>> &&promise);
+
+  static Result<string> get_background_url(const string &name,
+                                           td_api::object_ptr<td_api::BackgroundType> background_type);
 
   static string get_dialog_invite_link_hash(Slice invite_link);
 
@@ -157,6 +160,7 @@ class LinkManager final : public Actor {
   vector<string> autologin_domains_;
   double autologin_update_time_ = 0.0;
   vector<string> url_auth_domains_;
+  vector<string> whitelisted_domains_;
 };
 
 }  // namespace td

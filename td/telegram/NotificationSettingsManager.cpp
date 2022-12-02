@@ -22,9 +22,9 @@
 #include "td/telegram/logevent/LogEventHelper.h"
 #include "td/telegram/MessagesManager.h"
 #include "td/telegram/NotificationManager.h"
-#include "td/telegram/NotificationSettings.hpp"
 #include "td/telegram/NotificationSound.h"
 #include "td/telegram/OptionManager.h"
+#include "td/telegram/ScopeNotificationSettings.hpp"
 #include "td/telegram/Td.h"
 #include "td/telegram/TdDb.h"
 #include "td/telegram/telegram_api.h"
@@ -934,7 +934,7 @@ void NotificationSettingsManager::add_saved_ringtone(td_api::object_ptr<td_api::
     return;
   }
 
-  auto download_file_id = td_->file_manager_->dup_file_id(file_id);
+  auto download_file_id = td_->file_manager_->dup_file_id(file_id, "add_saved_ringtone");
   file_id = td_->file_manager_
                 ->register_generate(FileType::Ringtone, FileLocationSource::FromServer, file_view.suggested_path(),
                                     PSTRING() << "#file_id#" << download_file_id.get(), DialogId(), file_view.size())

@@ -7,6 +7,7 @@
 #include "td/telegram/LinkManager.h"
 
 #include "td/telegram/AccessRights.h"
+#include "td/telegram/BackgroundType.h"
 #include "td/telegram/ChannelId.h"
 #include "td/telegram/ChannelType.h"
 #include "td/telegram/ConfigManager.h"
@@ -89,6 +90,7 @@ static AdministratorRights get_administrator_rights(Slice rights, bool for_chann
   bool can_invite_users = false;
   bool can_restrict_members = false;
   bool can_pin_messages = false;
+  bool can_manage_topics = false;
   bool can_promote_members = false;
   bool can_manage_calls = false;
   bool is_anonymous = false;
@@ -107,6 +109,8 @@ static AdministratorRights get_administrator_rights(Slice rights, bool for_chann
       can_invite_users = true;
     } else if (right == "pin_messages") {
       can_pin_messages = true;
+    } else if (right == "manage_topics") {
+      can_manage_topics = true;
     } else if (right == "promote_members") {
       can_promote_members = true;
     } else if (right == "manage_video_chats") {
@@ -119,7 +123,7 @@ static AdministratorRights get_administrator_rights(Slice rights, bool for_chann
   }
   return AdministratorRights(is_anonymous, can_manage_dialog, can_change_info, can_post_messages, can_edit_messages,
                              can_delete_messages, can_invite_users, can_restrict_members, can_pin_messages,
-                             can_promote_members, can_manage_calls,
+                             can_manage_topics, can_promote_members, can_manage_calls,
                              for_channel ? ChannelType::Broadcast : ChannelType::Megagroup);
 }
 
@@ -750,6 +754,8 @@ void LinkManager::start_up() {
   autologin_domains_ = full_split(G()->td_db()->get_binlog_pmc()->get("autologin_domains"), '\xFF');
 
   url_auth_domains_ = full_split(G()->td_db()->get_binlog_pmc()->get("url_auth_domains"), '\xFF');
+
+  whitelisted_domains_ = full_split(G()->td_db()->get_binlog_pmc()->get("whitelisted_domains"), '\xFF');
 }
 
 void LinkManager::tear_down() {
@@ -1235,10 +1241,17 @@ unique_ptr<LinkManager::InternalLink> LinkManager::parse_t_me_link_query(Slice q
   if (path[0] == "c") {
     if (path.size() >= 3 && to_integer<int64>(path[1]) > 0 && to_integer<int64>(path[2]) > 0) {
       // /c/123456789/12345?single&thread=<thread_id>&comment=<message_id>&t=<media_timestamp>
+      // /c/123456789/1234/12345?single&comment=<message_id>&t=<media_timestamp>
       is_first_arg = false;
-      return td::make_unique<InternalLinkMessage>(
-          PSTRING() << "tg:privatepost?channel=" << to_integer<int64>(path[1]) << "&post=" << to_integer<int64>(path[2])
-                    << copy_arg("single") << copy_arg("thread") << copy_arg("comment") << copy_arg("t"));
+      auto post = to_integer<int64>(path[2]);
+      auto thread = PSTRING() << copy_arg("thread");
+      if (path.size() >= 4 && to_integer<int64>(path[3]) > 0) {
+        thread = PSTRING() << "&thread=" << post;
+        post = to_integer<int64>(path[3]);
+      }
+      return td::make_unique<InternalLinkMessage>(PSTRING() << "tg:privatepost?channel=" << to_integer<int64>(path[1])
+                                                            << "&post=" << post << copy_arg("single") << thread
+                                                            << copy_arg("comment") << copy_arg("t"));
     }
   } else if (path[0] == "login") {
     if (path.size() >= 2 && !path[1].empty()) {
@@ -1348,10 +1361,17 @@ unique_ptr<LinkManager::InternalLink> LinkManager::parse_t_me_link_query(Slice q
   } else if (is_valid_username(path[0])) {
     if (path.size() >= 2 && to_integer<int64>(path[1]) > 0) {
       // /<username>/12345?single&thread=<thread_id>&comment=<message_id>&t=<media_timestamp>
+      // /<username>/1234/12345?single&comment=<message_id>&t=<media_timestamp>
       is_first_arg = false;
-      return td::make_unique<InternalLinkMessage>(
-          PSTRING() << "tg:resolve?domain=" << url_encode(path[0]) << "&post=" << to_integer<int64>(path[1])
-                    << copy_arg("single") << copy_arg("thread") << copy_arg("comment") << copy_arg("t"));
+      auto post = to_integer<int64>(path[1]);
+      auto thread = PSTRING() << copy_arg("thread");
+      if (path.size() >= 3 && to_integer<int64>(path[2]) > 0) {
+        thread = PSTRING() << "&thread=" << post;
+        post = to_integer<int64>(path[2]);
+      }
+      return td::make_unique<InternalLinkMessage>(PSTRING() << "tg:resolve?domain=" << url_encode(path[0])
+                                                            << "&post=" << post << copy_arg("single") << thread
+                                                            << copy_arg("comment") << copy_arg("t"));
     }
     auto username = path[0];
     for (auto &arg : url_query.args_) {
@@ -1466,7 +1486,7 @@ unique_ptr<LinkManager::InternalLink> LinkManager::get_internal_link_passport(
 }
 
 void LinkManager::update_autologin_domains(string autologin_token, vector<string> autologin_domains,
-                                           vector<string> url_auth_domains) {
+                                           vector<string> url_auth_domains, vector<string> whitelisted_domains) {
   autologin_update_time_ = Time::now();
   autologin_token_ = std::move(autologin_token);
   if (autologin_domains_ != autologin_domains) {
@@ -1476,6 +1496,10 @@ void LinkManager::update_autologin_domains(string autologin_token, vector<string
   if (url_auth_domains_ != url_auth_domains) {
     url_auth_domains_ = std::move(url_auth_domains);
     G()->td_db()->get_binlog_pmc()->set("url_auth_domains", implode(url_auth_domains_, '\xFF'));
+  }
+  if (whitelisted_domains_ != whitelisted_domains) {
+    whitelisted_domains_ = std::move(whitelisted_domains);
+    G()->td_db()->get_binlog_pmc()->set("whitelisted_domains", implode(whitelisted_domains_, '\xFF'));
   }
 }
 
@@ -1505,6 +1529,9 @@ void LinkManager::get_external_link_info(string &&link, Promise<td_api::object_p
   if (r_url.is_error()) {
     return promise.set_value(std::move(default_result));
   }
+
+  bool skip_confirm = td::contains(whitelisted_domains_, r_url.ok().host_);
+  default_result->skip_confirm_ = skip_confirm;
 
   if (!td::contains(autologin_domains_, r_url.ok().host_)) {
     if (td::contains(url_auth_domains_, r_url.ok().host_)) {
@@ -1551,7 +1578,7 @@ void LinkManager::get_external_link_info(string &&link, Promise<td_api::object_p
 
   url.query_ = PSTRING() << path << parameters << added_parameter << hash;
 
-  promise.set_value(td_api::make_object<td_api::loginUrlInfoOpen>(url.get_url(), false));
+  promise.set_value(td_api::make_object<td_api::loginUrlInfoOpen>(url.get_url(), skip_confirm));
 }
 
 void LinkManager::get_login_url_info(FullMessageId full_message_id, int64 button_id,
@@ -1571,6 +1598,23 @@ void LinkManager::get_login_url(FullMessageId full_message_id, int64 button_id, 
 void LinkManager::get_link_login_url(const string &url, bool allow_write_access,
                                      Promise<td_api::object_ptr<td_api::httpUrl>> &&promise) {
   td_->create_handler<AcceptUrlAuthQuery>(std::move(promise))->send(url, FullMessageId(), 0, allow_write_access);
+}
+
+Result<string> LinkManager::get_background_url(const string &name,
+                                               td_api::object_ptr<td_api::BackgroundType> background_type) {
+  TRY_RESULT(type, BackgroundType::get_background_type(background_type.get()));
+  auto url = PSTRING() << G()->get_option_string("t_me_url", "https://t.me/") << "bg/";
+  auto link = type.get_link();
+  if (type.has_file()) {
+    url += name;
+    if (!link.empty()) {
+      url += '?';
+      url += link;
+    }
+  } else {
+    url += link;
+  }
+  return url;
 }
 
 string LinkManager::get_dialog_invite_link_hash(Slice invite_link) {
@@ -1722,6 +1766,7 @@ Result<MessageLinkInfo> LinkManager::get_message_link_info(Slice url) {
   Slice channel_id_slice;
   Slice message_id_slice;
   Slice comment_message_id_slice = "0";
+  Slice top_thread_message_id_slice;
   Slice media_timestamp_slice;
   bool is_single = false;
   bool for_comment = false;
@@ -1773,10 +1818,12 @@ Result<MessageLinkInfo> LinkManager::get_message_link_info(Slice url) {
       }
       if (key_value.first == "thread") {
         for_comment = true;
+        top_thread_message_id_slice = key_value.second;
       }
     }
   } else {
     // /c/123456789/12345
+    // /c/123456789/1234/12345
     // /username/12345?single
 
     CHECK(!url.empty() && url[0] == '/');
@@ -1815,8 +1862,14 @@ Result<MessageLinkInfo> LinkManager::get_message_link_info(Slice url) {
         }
         if (key_value.first == "thread") {
           for_comment = true;
+          top_thread_message_id_slice = key_value.second;
         }
       }
+    }
+    auto slash_pos = message_id_slice.find('/');
+    if (slash_pos != Slice::npos) {
+      top_thread_message_id_slice = message_id_slice.substr(0, slash_pos);
+      message_id_slice.remove_prefix(slash_pos + 1);
     }
   }
 
@@ -1832,6 +1885,18 @@ Result<MessageLinkInfo> LinkManager::get_message_link_info(Slice url) {
   auto r_message_id = to_integer_safe<int32>(message_id_slice);
   if (r_message_id.is_error() || !ServerMessageId(r_message_id.ok()).is_valid()) {
     return Status::Error("Wrong message ID");
+  }
+
+  int32 top_thread_message_id = 0;
+  if (!top_thread_message_id_slice.empty()) {
+    auto r_top_thread_message_id = to_integer_safe<int32>(top_thread_message_id_slice);
+    if (r_top_thread_message_id.is_error()) {
+      return Status::Error("Wrong message thread ID");
+    }
+    top_thread_message_id = r_top_thread_message_id.ok();
+    if (!ServerMessageId(top_thread_message_id).is_valid()) {
+      return Status::Error("Invalid message thread ID");
+    }
   }
 
   auto r_comment_message_id = to_integer_safe<int32>(comment_message_id_slice);
@@ -1882,6 +1947,7 @@ Result<MessageLinkInfo> LinkManager::get_message_link_info(Slice url) {
   info.channel_id = channel_id;
   info.message_id = MessageId(ServerMessageId(r_message_id.ok()));
   info.comment_message_id = MessageId(ServerMessageId(r_comment_message_id.ok()));
+  info.top_thread_message_id = MessageId(ServerMessageId(top_thread_message_id));
   info.media_timestamp = is_media_timestamp_invalid ? 0 : media_timestamp;
   info.is_single = is_single;
   info.for_comment = for_comment;

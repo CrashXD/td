@@ -55,6 +55,7 @@
 #include "td/utils/misc.h"
 #include "td/utils/PathView.h"
 #include "td/utils/Random.h"
+#include "td/utils/ScopeGuard.h"
 #include "td/utils/Slice.h"
 #include "td/utils/SliceBuilder.h"
 #include "td/utils/StackAllocator.h"
@@ -1518,6 +1519,10 @@ void StickersManager::init() {
     auto &sticker_set = add_special_sticker_set(SpecialStickerSetType::default_statuses());
     load_special_sticker_set_info_from_binlog(sticker_set);
   }
+  {
+    auto &sticker_set = add_special_sticker_set(SpecialStickerSetType::default_topic_icons());
+    load_special_sticker_set_info_from_binlog(sticker_set);
+  }
 
   dice_emojis_str_ =
       td_->option_manager_->get_option_string("dice_emojis", "🎲\x01🎯\x01🏀\x01⚽\x01⚽️\x01🎰\x01🎳");
@@ -1560,8 +1565,7 @@ void StickersManager::init() {
   td_->option_manager_->set_option_empty("animated_emoji_sticker_set_name");  // legacy
 }
 
-td_api::object_ptr<td_api::emojiReaction> StickersManager::get_emoji_reaction_object(const string &emoji) {
-  load_reactions();
+td_api::object_ptr<td_api::emojiReaction> StickersManager::get_emoji_reaction_object(const string &emoji) const {
   for (auto &reaction : reactions_.reactions_) {
     if (reaction.reaction_ == emoji) {
       return td_api::make_object<td_api::emojiReaction>(
@@ -1572,6 +1576,16 @@ td_api::object_ptr<td_api::emojiReaction> StickersManager::get_emoji_reaction_ob
     }
   }
   return nullptr;
+}
+
+void StickersManager::get_emoji_reaction(const string &emoji,
+                                         Promise<td_api::object_ptr<td_api::emojiReaction>> &&promise) {
+  load_reactions();
+  if (reactions_.reactions_.empty() && reactions_.are_being_reloaded_) {
+    pending_get_emoji_reaction_queries_.emplace_back(emoji, std::move(promise));
+    return;
+  }
+  promise.set_value(get_emoji_reaction_object(emoji));
 }
 
 vector<string> StickersManager::get_recent_reactions() {
@@ -1720,7 +1734,7 @@ void StickersManager::load_special_sticker_set_by_type(SpecialStickerSetType typ
 }
 
 void StickersManager::load_special_sticker_set(SpecialStickerSet &sticker_set) {
-  CHECK(!td_->auth_manager_->is_bot());
+  CHECK(!td_->auth_manager_->is_bot() || sticker_set.type_ == SpecialStickerSetType::default_topic_icons());
   if (sticker_set.is_being_loaded_) {
     return;
   }
@@ -1826,6 +1840,10 @@ void StickersManager::on_load_special_sticker_set(const SpecialStickerSetType &t
   }
   if (type == SpecialStickerSetType::default_statuses()) {
     set_promises(pending_get_default_statuses_queries_);
+    return;
+  }
+  if (type == SpecialStickerSetType::default_topic_icons()) {
+    set_promises(pending_get_default_topic_icons_queries_);
     return;
   }
 
@@ -2919,6 +2937,7 @@ StickerSetId StickersManager::get_sticker_set_id(const tl_object_ptr<telegram_ap
     case telegram_api::inputStickerSetPremiumGifts::ID:
     case telegram_api::inputStickerSetEmojiGenericAnimations::ID:
     case telegram_api::inputStickerSetEmojiDefaultStatuses::ID:
+    case telegram_api::inputStickerSetEmojiDefaultTopicIcons::ID:
       LOG(ERROR) << "Receive special sticker set " << to_string(set_ptr);
       return add_special_sticker_set(SpecialStickerSetType(set_ptr)).id_;
     case telegram_api::inputStickerSetDice::ID:
@@ -2951,6 +2970,7 @@ StickerSetId StickersManager::add_sticker_set(tl_object_ptr<telegram_api::InputS
     case telegram_api::inputStickerSetPremiumGifts::ID:
     case telegram_api::inputStickerSetEmojiGenericAnimations::ID:
     case telegram_api::inputStickerSetEmojiDefaultStatuses::ID:
+    case telegram_api::inputStickerSetEmojiDefaultTopicIcons::ID:
       LOG(ERROR) << "Receive special sticker set " << to_string(set_ptr);
       return add_special_sticker_set(SpecialStickerSetType(set_ptr)).id_;
     case telegram_api::inputStickerSetDice::ID:
@@ -3025,7 +3045,7 @@ FileId StickersManager::dup_sticker(FileId new_id, FileId old_id) {
   auto new_sticker = make_unique<Sticker>(*old_sticker);
   new_sticker->file_id_ = new_id;
   // there is no reason to dup m_thumbnail and premium_animation_file_id
-  new_sticker->s_thumbnail_.file_id = td_->file_manager_->dup_file_id(new_sticker->s_thumbnail_.file_id);
+  new_sticker->s_thumbnail_.file_id = td_->file_manager_->dup_file_id(new_sticker->s_thumbnail_.file_id, "dup_sticker");
   stickers_.set(new_id, std::move(new_sticker));
   return new_id;
 }
@@ -3148,6 +3168,7 @@ StickerSetId StickersManager::on_get_input_sticker_set(FileId sticker_file_id,
     case telegram_api::inputStickerSetPremiumGifts::ID:
     case telegram_api::inputStickerSetEmojiGenericAnimations::ID:
     case telegram_api::inputStickerSetEmojiDefaultStatuses::ID:
+    case telegram_api::inputStickerSetEmojiDefaultTopicIcons::ID:
       return add_special_sticker_set(SpecialStickerSetType(set_ptr)).id_;
     case telegram_api::inputStickerSetDice::ID:
       return StickerSetId();
@@ -3830,8 +3851,12 @@ void StickersManager::on_get_special_sticker_set(const SpecialStickerSetType &ty
   sticker_set.short_name_ = clean_username(s->short_name_);
   sticker_set.type_ = type;
 
-  G()->td_db()->get_binlog_pmc()->set(type.type_, PSTRING() << sticker_set.id_.get() << ' ' << sticker_set.access_hash_
-                                                            << ' ' << sticker_set.short_name_);
+  if (!td_->auth_manager_->is_bot()) {
+    G()->td_db()->get_binlog_pmc()->set(type.type_, PSTRING()
+                                                        << sticker_set.id_.get() << ' ' << sticker_set.access_hash_
+                                                        << ' ' << sticker_set.short_name_);
+  }
+
   sticker_set.is_being_loaded_ = true;
   on_load_special_sticker_set(type, Status::OK());
 }
@@ -3842,26 +3867,30 @@ td_api::object_ptr<td_api::updateActiveEmojiReactions> StickersManager::get_upda
 }
 
 void StickersManager::save_active_reactions() {
-  LOG(INFO) << "Save active reactions";
+  LOG(INFO) << "Save " << active_reactions_.size() << " active reactions";
   G()->td_db()->get_binlog_pmc()->set("active_reactions", log_event_store(active_reactions_).as_slice().str());
 }
 
 void StickersManager::save_reactions() {
-  LOG(INFO) << "Save available reactions";
+  LOG(INFO) << "Save " << reactions_.reactions_.size() << " available reactions";
+  are_reactions_loaded_from_database_ = true;
   G()->td_db()->get_binlog_pmc()->set("reactions", log_event_store(reactions_).as_slice().str());
 }
 
 void StickersManager::save_recent_reactions() {
-  LOG(INFO) << "Save recent reactions";
+  LOG(INFO) << "Save " << recent_reactions_.reactions_.size() << " recent reactions";
+  are_recent_reactions_loaded_from_database_ = true;
   G()->td_db()->get_binlog_pmc()->set("recent_reactions", log_event_store(recent_reactions_).as_slice().str());
 }
 
 void StickersManager::save_top_reactions() {
-  LOG(INFO) << "Save top reactions";
+  LOG(INFO) << "Save " << top_reactions_.reactions_.size() << " top reactions";
+  are_top_reactions_loaded_from_database_ = true;
   G()->td_db()->get_binlog_pmc()->set("top_reactions", log_event_store(top_reactions_).as_slice().str());
 }
 
 void StickersManager::load_active_reactions() {
+  LOG(INFO) << "Loading active reactions";
   string active_reactions = G()->td_db()->get_binlog_pmc()->get("active_reactions");
   if (active_reactions.empty()) {
     return reload_reactions();
@@ -3887,6 +3916,7 @@ void StickersManager::load_reactions() {
   }
   are_reactions_loaded_from_database_ = true;
 
+  LOG(INFO) << "Loading available reactions";
   string reactions = G()->td_db()->get_binlog_pmc()->get("reactions");
   if (reactions.empty()) {
     return reload_reactions();
@@ -3917,6 +3947,7 @@ void StickersManager::load_recent_reactions() {
   }
   are_recent_reactions_loaded_from_database_ = true;
 
+  LOG(INFO) << "Loading recent reactions";
   string recent_reactions = G()->td_db()->get_binlog_pmc()->get("recent_reactions");
   if (recent_reactions.empty()) {
     return reload_recent_reactions();
@@ -3938,6 +3969,7 @@ void StickersManager::load_top_reactions() {
   }
   are_top_reactions_loaded_from_database_ = true;
 
+  LOG(INFO) << "Loading top reactions";
   string top_reactions = G()->td_db()->get_binlog_pmc()->get("top_reactions");
   if (top_reactions.empty()) {
     return reload_top_reactions();
@@ -3976,6 +4008,14 @@ void StickersManager::on_get_available_reactions(
     tl_object_ptr<telegram_api::messages_AvailableReactions> &&available_reactions_ptr) {
   CHECK(reactions_.are_being_reloaded_);
   reactions_.are_being_reloaded_ = false;
+
+  auto get_emoji_reaction_queries = std::move(pending_get_emoji_reaction_queries_);
+  pending_get_emoji_reaction_queries_.clear();
+  SCOPE_EXIT {
+    for (auto &query : get_emoji_reaction_queries) {
+      query.second.set_value(get_emoji_reaction_object(query.first));
+    }
+  };
 
   if (available_reactions_ptr == nullptr) {
     // failed to get available reactions
@@ -5907,7 +5947,7 @@ void StickersManager::get_default_emoji_statuses(bool is_recursive,
       LOG(ERROR) << "Ignore wrong sticker " << sticker_id;
       continue;
     }
-    statuses.emplace_back(td_api::make_object<td_api::emojiStatus>(custom_emoji_id.get()));
+    statuses.push_back(td_api::make_object<td_api::emojiStatus>(custom_emoji_id.get()));
     if (statuses.size() >= 8) {
       break;
     }
@@ -5927,6 +5967,46 @@ bool StickersManager::is_default_emoji_status(CustomEmojiId custom_emoji_id) {
     }
   }
   return false;
+}
+
+void StickersManager::get_default_topic_icons(bool is_recursive,
+                                              Promise<td_api::object_ptr<td_api::stickers>> &&promise) {
+  TRY_STATUS_PROMISE(promise, G()->close_status());
+
+  auto &special_sticker_set = add_special_sticker_set(SpecialStickerSetType::default_topic_icons());
+  auto sticker_set = get_sticker_set(special_sticker_set.id_);
+  if (sticker_set == nullptr || !sticker_set->was_loaded_) {
+    if (is_recursive) {
+      return promise.set_value(td_api::make_object<td_api::stickers>());
+    }
+
+    pending_get_default_topic_icons_queries_.push_back(PromiseCreator::lambda(
+        [actor_id = actor_id(this), promise = std::move(promise)](Result<Unit> &&result) mutable {
+          if (result.is_error()) {
+            promise.set_error(result.move_as_error());
+          } else {
+            send_closure(actor_id, &StickersManager::get_default_topic_icons, true, std::move(promise));
+          }
+        }));
+    load_special_sticker_set(special_sticker_set);
+    return;
+  }
+
+  if (!is_recursive && td_->auth_manager_->is_bot() && G()->unix_time() >= sticker_set->expires_at_) {
+    auto reload_promise = PromiseCreator::lambda(
+        [actor_id = actor_id(this), promise = std::move(promise)](Result<Unit> &&result) mutable {
+          if (result.is_error()) {
+            promise.set_error(result.move_as_error());
+          } else {
+            send_closure(actor_id, &StickersManager::get_default_topic_icons, true, std::move(promise));
+          }
+        });
+    do_reload_sticker_set(sticker_set->id_, get_input_sticker_set(sticker_set), sticker_set->hash_,
+                          std::move(reload_promise));
+    return;
+  }
+
+  promise.set_value(get_stickers_object(sticker_set->sticker_ids_));
 }
 
 void StickersManager::load_custom_emoji_sticker_from_database_force(CustomEmojiId custom_emoji_id) {
@@ -6272,10 +6352,10 @@ void StickersManager::timeout_expired() {
 }
 
 void StickersManager::flush_pending_animated_emoji_clicks() {
-  if (pending_animated_emoji_clicks_.empty()) {
+  if (G()->close_flag()) {
     return;
   }
-  if (G()->close_flag()) {
+  if (pending_animated_emoji_clicks_.empty()) {
     return;
   }
   auto clicks = std::move(pending_animated_emoji_clicks_);
@@ -6440,7 +6520,7 @@ void StickersManager::schedule_update_animated_emoji_clicked(const StickerSet *s
   }
 
   auto all_sticker_ids = get_animated_emoji_click_stickers(sticker_set, emoji);
-  FlatHashMap<int, FileId> sticker_ids;
+  FlatHashMap<int32, FileId> sticker_ids;
   for (auto sticker_id : all_sticker_ids) {
     auto it = sticker_set->sticker_emojis_map_.find(sticker_id);
     if (it != sticker_set->sticker_emojis_map_.end()) {
@@ -7563,10 +7643,11 @@ void StickersManager::upload_sticker_file(UserId user_id, FileId file_id, Promis
   FileId upload_file_id;
   if (td_->file_manager_->get_file_view(file_id).get_type() == FileType::Sticker) {
     CHECK(get_input_media(file_id, nullptr, nullptr, string()) == nullptr);
-    upload_file_id = dup_sticker(td_->file_manager_->dup_file_id(file_id), file_id);
+    upload_file_id = dup_sticker(td_->file_manager_->dup_file_id(file_id, "upload_sticker_file"), file_id);
   } else {
     CHECK(td_->documents_manager_->get_input_media(file_id, nullptr, nullptr) == nullptr);
-    upload_file_id = td_->documents_manager_->dup_document(td_->file_manager_->dup_file_id(file_id), file_id);
+    upload_file_id =
+        td_->documents_manager_->dup_document(td_->file_manager_->dup_file_id(file_id, "upload_sticker_file"), file_id);
   }
 
   CHECK(upload_file_id.is_valid());

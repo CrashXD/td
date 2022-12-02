@@ -31,6 +31,7 @@
 #include "td/utils/common.h"
 #include "td/utils/FlatHashMap.h"
 #include "td/utils/FlatHashSet.h"
+#include "td/utils/HashTableUtils.h"
 #include "td/utils/Hints.h"
 #include "td/utils/Promise.h"
 #include "td/utils/Slice.h"
@@ -116,6 +117,8 @@ class StickersManager final : public Actor {
 
   bool is_default_emoji_status(CustomEmojiId custom_emoji_id);
 
+  void get_default_topic_icons(bool is_recursive, Promise<td_api::object_ptr<td_api::stickers>> &&promise);
+
   void get_custom_emoji_stickers(vector<CustomEmojiId> &&custom_emoji_ids, bool use_database,
                                  Promise<td_api::object_ptr<td_api::stickers>> &&promise);
 
@@ -177,7 +180,7 @@ class StickersManager final : public Actor {
 
   void view_featured_sticker_sets(const vector<StickerSetId> &sticker_set_ids);
 
-  td_api::object_ptr<td_api::emojiReaction> get_emoji_reaction_object(const string &emoji);
+  void get_emoji_reaction(const string &emoji, Promise<td_api::object_ptr<td_api::emojiReaction>> &&promise);
 
   vector<string> get_recent_reactions();
 
@@ -611,6 +614,8 @@ class StickersManager final : public Actor {
   tl_object_ptr<td_api::stickerSetInfo> get_sticker_set_info_object(StickerSetId sticker_set_id, size_t covers_limit,
                                                                     bool prefer_premium) const;
 
+  td_api::object_ptr<td_api::emojiReaction> get_emoji_reaction_object(const string &emoji) const;
+
   Sticker *get_sticker(FileId file_id);
   const Sticker *get_sticker(FileId file_id) const;
 
@@ -1014,8 +1019,8 @@ class StickersManager final : public Actor {
   FlatHashMap<string, FoundStickers> found_stickers_;
   FlatHashMap<string, vector<std::pair<int32, Promise<td_api::object_ptr<td_api::stickers>>>>> search_stickers_queries_;
 
-  std::unordered_map<string, vector<StickerSetId>> found_sticker_sets_;
-  std::unordered_map<string, vector<Promise<Unit>>> search_sticker_sets_queries_;
+  std::unordered_map<string, vector<StickerSetId>, Hash<string>> found_sticker_sets_;
+  std::unordered_map<string, vector<Promise<Unit>>, Hash<string>> search_sticker_sets_queries_;
 
   FlatHashSet<StickerSetId, StickerSetIdHash> pending_viewed_featured_sticker_set_ids_;
   Timeout pending_featured_sticker_set_views_timeout_;
@@ -1046,6 +1051,9 @@ class StickersManager final : public Actor {
   vector<Promise<Unit>> pending_get_premium_gift_option_sticker_queries_;
   vector<Promise<Unit>> pending_get_generic_animations_queries_;
   vector<Promise<Unit>> pending_get_default_statuses_queries_;
+  vector<Promise<Unit>> pending_get_default_topic_icons_queries_;
+
+  vector<std::pair<string, Promise<td_api::object_ptr<td_api::emojiReaction>>>> pending_get_emoji_reaction_queries_;
 
   double next_click_animated_emoji_message_time_ = 0;
   double next_update_animated_emoji_clicked_time_ = 0;

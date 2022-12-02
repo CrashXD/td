@@ -19,6 +19,7 @@
 
 #include "td/utils/algorithm.h"
 #include "td/utils/format.h"
+#include "td/utils/HashTableUtils.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
 #include "td/utils/Promise.h"
@@ -1322,7 +1323,7 @@ vector<Slice> find_mentions(Slice str) {
   auto mentions = match_mentions(str);
   td::remove_if(mentions, [](Slice mention) {
     mention.remove_prefix(1);
-    if (mention.size() >= 5) {
+    if (mention.size() >= 4) {
       return false;
     }
     auto lowered_mention = to_lower(mention);
@@ -1563,12 +1564,12 @@ static bool are_entities_valid(const vector<MessageEntity> &entities) {
       }
       // parents are not pre after this point
       if (is_pre_entity(entity.type) && (nested_entity_type_mask & ~get_blockquote_entities_mask()) != 0) {
-        // Pre and Code can't be contained in other entities, except blockquote
+        // Pre and Code can't be part of other entities, except blockquote
         return false;
       }
       if ((is_continuous_entity(entity.type) || is_blockquote_entity(entity.type)) &&
           (nested_entity_type_mask & get_continuous_entities_mask()) != 0) {
-        // continuous and blockquote can't be contained in continuous
+        // continuous and blockquote can't be part of other continuous entity
         return false;
       }
       if ((nested_entity_type_mask & get_splittable_entities_mask()) != 0) {
@@ -2455,7 +2456,7 @@ static FormattedText parse_text_url_entities_v3(Slice text, const vector<Message
 }
 
 static vector<MessageEntity> find_splittable_entities_v3(Slice text, const vector<MessageEntity> &entities) {
-  std::unordered_set<size_t> unallowed_boundaries;
+  std::unordered_set<int32, Hash<int32>> unallowed_boundaries;
   for (auto &entity : entities) {
     unallowed_boundaries.insert(entity.offset);
     unallowed_boundaries.insert(entity.offset + entity.length);
@@ -2489,7 +2490,8 @@ static vector<MessageEntity> find_splittable_entities_v3(Slice text, const vecto
     if ((c == '_' || c == '*' || c == '~' || c == '|') && text[i] == text[i + 1] &&
         unallowed_boundaries.count(utf16_offset) == 0) {
       auto j = i + 2;
-      while (j != text.size() && text[j] == text[i] && unallowed_boundaries.count(utf16_offset + j - i - 1) == 0) {
+      while (j != text.size() && text[j] == text[i] &&
+             unallowed_boundaries.count(utf16_offset + static_cast<int32>(j - i - 1)) == 0) {
         j++;
       }
       if (j == i + 2) {
@@ -4241,8 +4243,6 @@ Status fix_formatted_text(string &text, vector<MessageEntity> &entities, bool al
 
   // new whitespace-only entities could be added after splitting of entities
   remove_invalid_entities(text, entities);
-
-  // TODO MAX_MESSAGE_LENGTH and MAX_CAPTION_LENGTH
 
   return Status::OK();
 }

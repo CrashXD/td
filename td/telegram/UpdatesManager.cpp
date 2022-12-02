@@ -34,8 +34,8 @@
 #include "td/telegram/net/DcOptions.h"
 #include "td/telegram/net/NetQuery.h"
 #include "td/telegram/NotificationManager.h"
-#include "td/telegram/NotificationSettings.h"
 #include "td/telegram/NotificationSettingsManager.h"
+#include "td/telegram/NotificationSettingsScope.h"
 #include "td/telegram/OptionManager.h"
 #include "td/telegram/OrderInfo.h"
 #include "td/telegram/PollId.h"
@@ -56,7 +56,7 @@
 #include "td/telegram/TdDb.h"
 #include "td/telegram/telegram_api.hpp"
 #include "td/telegram/ThemeManager.h"
-#include "td/telegram/VoiceNotesManager.h"
+#include "td/telegram/Usernames.h"
 #include "td/telegram/WebPagesManager.h"
 
 #include "td/actor/MultiPromise.h"
@@ -177,11 +177,11 @@ class GetDifferenceQuery final : public Td::ResultHandler {
   }
 };
 
-const double UpdatesManager::MAX_UNFILLED_GAP_TIME = 0.7;
-const double UpdatesManager::MAX_PTS_SAVE_DELAY = 0.05;
-
 UpdatesManager::UpdatesManager(Td *td, ActorShared<> parent) : td_(td), parent_(std::move(parent)) {
   last_pts_save_time_ = last_qts_save_time_ = Time::now() - 2 * MAX_PTS_SAVE_DELAY;
+
+  pending_audio_transcription_timeout_.set_callback(on_pending_audio_transcription_timeout_callback);
+  pending_audio_transcription_timeout_.set_callback_data(static_cast<void *>(td_));
 }
 
 void UpdatesManager::tear_down() {
@@ -306,6 +306,20 @@ void UpdatesManager::fill_gap(void *td, const char *source) {
   }
 
   updates_manager->get_difference("fill_gap");
+}
+
+void UpdatesManager::on_pending_audio_transcription_timeout_callback(void *td, int64 transcription_id) {
+  if (G()->close_flag()) {
+    return;
+  }
+  CHECK(td != nullptr);
+  if (!static_cast<Td *>(td)->auth_manager_->is_authorized()) {
+    return;
+  }
+
+  auto updates_manager = static_cast<Td *>(td)->updates_manager_.get();
+  send_closure_later(updates_manager->actor_id(updates_manager), &UpdatesManager::on_pending_audio_transcription_failed,
+                     transcription_id, Status::Error(500, "Timeout expired"));
 }
 
 void UpdatesManager::get_difference(const char *source) {
@@ -465,7 +479,7 @@ Promise<> UpdatesManager::set_pts(int32 pts, const char *source) {
   Promise<> result;
   if (pts > get_pts() || (0 < pts && pts < get_pts() - 399999)) {  // pts can only go up or drop cardinally
     if (pts < get_pts() - 399999) {
-      LOG(WARNING) << "Pts decreases from " << get_pts() << " to " << pts << " from " << source;
+      LOG(WARNING) << "PTS decreases from " << get_pts() << " to " << pts << " from " << source;
     } else {
       LOG(INFO) << "Update pts from " << get_pts() << " to " << pts << " from " << source;
     }
@@ -760,6 +774,8 @@ bool UpdatesManager::is_acceptable_message(const telegram_api::Message *message_
         case telegram_api::messageActionWebViewDataSentMe::ID:
         case telegram_api::messageActionWebViewDataSent::ID:
         case telegram_api::messageActionGiftPremium::ID:
+        case telegram_api::messageActionTopicCreate::ID:
+        case telegram_api::messageActionTopicEdit::ID:
           break;
         case telegram_api::messageActionChatCreate::ID: {
           auto chat_create = static_cast<const telegram_api::messageActionChatCreate *>(action);
@@ -1133,6 +1149,49 @@ FlatHashSet<int64> UpdatesManager::get_sent_messages_random_ids(const telegram_a
     }
   }
   return random_ids;
+}
+
+const telegram_api::Message *UpdatesManager::get_message_by_random_id(const telegram_api::Updates *updates_ptr,
+                                                                      DialogId dialog_id, int64 random_id) {
+  auto updates = get_updates(updates_ptr);
+  if (updates == nullptr) {
+    return nullptr;
+  }
+
+  int32 message_id = 0;
+  for (auto &update : *updates) {
+    if (update->get_id() == telegram_api::updateMessageID::ID) {
+      auto update_message_id = static_cast<const telegram_api::updateMessageID *>(update.get());
+      if (update_message_id->random_id_ == random_id) {
+        if (message_id != 0 || update_message_id->id_ == 0) {
+          return nullptr;
+        }
+        message_id = update_message_id->id_;
+      }
+    }
+  }
+  if (message_id == 0) {
+    return nullptr;
+  }
+
+  const telegram_api::Message *result = nullptr;
+  FullMessageId full_message_id(dialog_id, MessageId(ServerMessageId(message_id)));
+  for (auto &update : *updates) {
+    auto constructor_id = update->get_id();
+    const tl_object_ptr<telegram_api::Message> *message = nullptr;
+    if (constructor_id == telegram_api::updateNewMessage::ID) {
+      message = &static_cast<const telegram_api::updateNewMessage *>(update.get())->message_;
+    } else if (constructor_id == telegram_api::updateNewChannelMessage::ID) {
+      message = &static_cast<const telegram_api::updateNewChannelMessage *>(update.get())->message_;
+    }
+    if (message != nullptr && MessagesManager::get_full_message_id(*message, false) == full_message_id) {
+      if (result != nullptr) {
+        return nullptr;
+      }
+      result = message->get();
+    }
+  }
+  return result;
 }
 
 vector<const tl_object_ptr<telegram_api::Message> *> UpdatesManager::get_new_messages(
@@ -1629,7 +1688,7 @@ void UpdatesManager::after_get_difference() {
     }
     VLOG(get_difference) << "Finished to apply " << total_update_count << " postponed updates";
     auto passed_time = Time::now() - begin_time;
-    if (passed_time >= 1.0) {
+    if (passed_time >= UPDATE_APPLY_WARNING_TIME) {
       LOG(WARNING) << "Applied " << total_update_count << " postponed for "
                    << (Time::now() - get_difference_start_time_) << " updates in " << chunk_count << " chunks in "
                    << passed_time;
@@ -1654,7 +1713,7 @@ void UpdatesManager::after_get_difference() {
                          << ", max_pts = " << accumulated_pts_ << " and " << pending_pts_updates_.size() << " + "
                          << postponed_pts_updates_.size() << " pending pts updates";
     auto passed_time = Time::now() - begin_time;
-    if (passed_time >= 1.0) {
+    if (passed_time >= UPDATE_APPLY_WARNING_TIME) {
       LOG(WARNING) << "Applied " << update_count << " postponed for " << (Time::now() - get_difference_start_time_)
                    << " pts updates in " << passed_time;
     }
@@ -1732,8 +1791,34 @@ void UpdatesManager::try_reload_data() {
   td_->stickers_manager_->reload_special_sticker_set_by_type(SpecialStickerSetType::premium_gifts());
   td_->stickers_manager_->reload_special_sticker_set_by_type(SpecialStickerSetType::generic_animations());
   td_->stickers_manager_->reload_special_sticker_set_by_type(SpecialStickerSetType::default_statuses());
+  td_->stickers_manager_->reload_special_sticker_set_by_type(SpecialStickerSetType::default_topic_icons());
 
   schedule_data_reload();
+}
+
+void UpdatesManager::subscribe_to_transcribed_audio_updates(int64 transcription_id, TranscribedAudioHandler on_update) {
+  if (pending_audio_transcriptions_.count(transcription_id) != 0) {
+    on_pending_audio_transcription_failed(transcription_id,
+                                          Status::Error(500, "Receive duplicate speech recognition identifier"));
+  }
+  bool is_inserted = pending_audio_transcriptions_.emplace(transcription_id, std::move(on_update)).second;
+  CHECK(is_inserted);
+  pending_audio_transcription_timeout_.set_timeout_in(transcription_id, AUDIO_TRANSCRIPTION_TIMEOUT);
+}
+
+void UpdatesManager::on_pending_audio_transcription_failed(int64 transcription_id, Status &&error) {
+  if (G()->close_flag()) {
+    return;
+  }
+  auto it = pending_audio_transcriptions_.find(transcription_id);
+  if (it == pending_audio_transcriptions_.end()) {
+    return;
+  }
+  auto on_update = std::move(it->second);
+  pending_audio_transcriptions_.erase(it);
+  pending_audio_transcription_timeout_.cancel_timeout(transcription_id);
+
+  on_update(std::move(error));
 }
 
 void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Update>> &&updates, int32 seq_begin,
@@ -2240,7 +2325,8 @@ void UpdatesManager::add_pending_pts_update(tl_object_ptr<telegram_api::Update> 
   if (new_pts < old_pts - 99 && source != AFTER_GET_DIFFERENCE_SOURCE) {
     bool need_restore_pts = new_pts < old_pts - 19999;
     auto now = Time::now();
-    if (now > last_pts_jump_warning_time_ + 1 && (need_restore_pts || now < last_pts_jump_warning_time_ + 5)) {
+    if (now > last_pts_jump_warning_time_ + 1 && (need_restore_pts || now < last_pts_jump_warning_time_ + 5) &&
+        !(old_pts == std::numeric_limits<int32>::max() && running_get_difference_)) {
       LOG(ERROR) << "Restore pts after delete_first_messages from " << old_pts << " to " << new_pts
                  << " is disabled, pts_count = " << pts_count << ", update is from " << source << ": "
                  << oneline(to_string(update));
@@ -2477,6 +2563,11 @@ void UpdatesManager::process_postponed_pts_updates() {
       continue;
     }
 
+    if (Time::now() - begin_time >= td::min(UPDATE_APPLY_WARNING_TIME / 2, 0.1)) {
+      // the updates will be applied or skipped later; reget the remaining updates through getDifference
+      break;
+    }
+
     auto last_update_it = update_it;
     for (int32 i = 1; true; i++) {
       ++last_update_it;
@@ -2520,14 +2611,14 @@ void UpdatesManager::process_postponed_pts_updates() {
   }
   CHECK(!running_get_difference_);
   if (skipped_update_count + applied_update_count > 0) {
-    VLOG(get_difference) << "Pts has changed from " << initial_pts << " to " << old_pts << " after skipping "
+    VLOG(get_difference) << "PTS has changed from " << initial_pts << " to " << old_pts << " after skipping "
                          << skipped_update_count << ", applying " << applied_update_count << " and keeping "
                          << postponed_pts_updates_.size() << " postponed updates";
   }
 
   auto passed_time = Time::now() - begin_time;
-  if (passed_time >= 1.0) {
-    LOG(WARNING) << "Pts has changed from " << initial_pts << " to " << old_pts << " after skipping "
+  if (passed_time >= UPDATE_APPLY_WARNING_TIME) {
+    LOG(WARNING) << "PTS has changed from " << initial_pts << " to " << old_pts << " after skipping "
                  << skipped_update_count << ", applying " << applied_update_count << " and keeping "
                  << postponed_pts_updates_.size() << " postponed for " << (Time::now() - get_difference_start_time_)
                  << " updates in " << passed_time;
@@ -2539,7 +2630,9 @@ void UpdatesManager::process_pending_pts_updates() {
     return;
   }
 
-  bool processed_pending_update = false;
+  auto begin_time = Time::now();
+  auto initial_pts = get_pts();
+  int32 applied_update_count = 0;
   while (!pending_pts_updates_.empty()) {
     auto update_it = pending_pts_updates_.begin();
     auto &update = update_it->second;
@@ -2548,7 +2641,7 @@ void UpdatesManager::process_pending_pts_updates() {
       break;
     }
 
-    processed_pending_update = true;
+    applied_update_count++;
     if (update.pts_count > 0) {
       td_->messages_manager_->process_pts_update(std::move(update.update));
       set_pts(update.pts, "process_pending_pts_updates")
@@ -2563,7 +2656,7 @@ void UpdatesManager::process_pending_pts_updates() {
     update.promise.set_value(Unit());
     pending_pts_updates_.erase(update_it);
   }
-  if (processed_pending_update) {
+  if (applied_update_count > 0) {
     pts_gap_timeout_.cancel_timeout();
   }
   if (!pending_pts_updates_.empty()) {
@@ -2578,6 +2671,13 @@ void UpdatesManager::process_pending_pts_updates() {
     }
     set_pts_gap_timeout(receive_time + MAX_UNFILLED_GAP_TIME - Time::now());
   }
+
+  auto passed_time = Time::now() - begin_time;
+  if (passed_time >= UPDATE_APPLY_WARNING_TIME) {
+    LOG(WARNING) << "PTS has changed from " << initial_pts << " to " << get_pts() << " after applying "
+                 << applied_update_count << " and keeping " << pending_pts_updates_.size() << " pending updates in "
+                 << passed_time;
+  }
 }
 
 void UpdatesManager::process_pending_seq_updates() {
@@ -2586,7 +2686,9 @@ void UpdatesManager::process_pending_seq_updates() {
     // must not return, because in case of seq overflow there are no pending seq updates
   }
 
-  bool processed_pending_update = false;
+  auto begin_time = Time::now();
+  int32 initial_seq = seq_;
+  int32 applied_update_count = 0;
   while (!pending_seq_updates_.empty() && !running_get_difference_) {
     auto update_it = pending_seq_updates_.begin();
     auto &update = update_it->second;
@@ -2596,7 +2698,7 @@ void UpdatesManager::process_pending_seq_updates() {
       break;
     }
 
-    processed_pending_update = true;
+    applied_update_count++;
     auto seq_end = update.seq_end;
     if (seq_begin - 1 == seq_) {
       process_seq_updates(seq_end, update.date, std::move(update.updates), std::move(update.promise));
@@ -2611,7 +2713,7 @@ void UpdatesManager::process_pending_seq_updates() {
     }
     pending_seq_updates_.erase(update_it);
   }
-  if (pending_seq_updates_.empty() || processed_pending_update) {
+  if (pending_seq_updates_.empty() || applied_update_count > 0) {
     seq_gap_timeout_.cancel_timeout();
   }
   if (!pending_seq_updates_.empty()) {
@@ -2626,6 +2728,13 @@ void UpdatesManager::process_pending_seq_updates() {
     }
     set_seq_gap_timeout(receive_time + MAX_UNFILLED_GAP_TIME - Time::now());
   }
+
+  auto passed_time = Time::now() - begin_time;
+  if (passed_time >= UPDATE_APPLY_WARNING_TIME) {
+    LOG(WARNING) << "Seq has changed from " << initial_seq << " to " << seq_ << " after applying "
+                 << applied_update_count << " and keeping " << pending_seq_updates_.size() << " pending updates in "
+                 << passed_time;
+  }
 }
 
 void UpdatesManager::process_pending_qts_updates() {
@@ -2634,7 +2743,9 @@ void UpdatesManager::process_pending_qts_updates() {
   }
 
   LOG(DEBUG) << "Process " << pending_qts_updates_.size() << " pending qts updates";
-  bool processed_pending_update = false;
+  auto begin_time = Time::now();
+  auto initial_qts = get_qts();
+  int32 applied_update_count = 0;
   while (!pending_qts_updates_.empty()) {
     CHECK(!running_get_difference_);
     auto update_it = pending_qts_updates_.begin();
@@ -2646,7 +2757,7 @@ void UpdatesManager::process_pending_qts_updates() {
     }
     auto promise = PromiseCreator::lambda(
         [promises = std::move(update_it->second.promises)](Unit) mutable { set_promises(promises); });
-    processed_pending_update = true;
+    applied_update_count++;
     if (qts == old_qts + 1) {
       process_qts_update(std::move(update_it->second.update), qts, std::move(promise));
     } else {
@@ -2655,7 +2766,7 @@ void UpdatesManager::process_pending_qts_updates() {
     pending_qts_updates_.erase(update_it);
   }
 
-  if (processed_pending_update) {
+  if (applied_update_count > 0) {
     qts_gap_timeout_.cancel_timeout();
   }
   if (!pending_qts_updates_.empty()) {
@@ -2671,6 +2782,13 @@ void UpdatesManager::process_pending_qts_updates() {
     set_qts_gap_timeout(receive_time + MAX_UNFILLED_GAP_TIME - Time::now());
   }
   CHECK(!running_get_difference_);
+
+  auto passed_time = Time::now() - begin_time;
+  if (passed_time >= UPDATE_APPLY_WARNING_TIME) {
+    LOG(WARNING) << "QTS has changed from " << initial_qts << " to " << get_qts() << " after applying "
+                 << applied_update_count << " and keeping " << pending_qts_updates_.size() << " pending updates in "
+                 << passed_time;
+  }
 }
 
 void UpdatesManager::set_pts_gap_timeout(double timeout) {
@@ -2796,7 +2914,7 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannelTooLong>
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannel> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->invalidate_channel_full(ChannelId(update->channel_id_), false);
+  td_->contacts_manager_->invalidate_channel_full(ChannelId(update->channel_id_), false, "updateChannel");
   promise.set_value(Unit());
 }
 
@@ -2851,22 +2969,32 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannelAvailabl
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateReadChannelDiscussionInbox> update,
                                Promise<Unit> &&promise) {
-  td_->messages_manager_->on_update_read_message_comments(
-      DialogId(ChannelId(update->channel_id_)), MessageId(ServerMessageId(update->top_msg_id_)), MessageId(),
-      MessageId(ServerMessageId(update->read_max_id_)), MessageId());
+  auto last_read_inbox_message_id = MessageId(ServerMessageId(update->read_max_id_));
+  if (!last_read_inbox_message_id.is_valid()) {
+    LOG(ERROR) << "Receive " << to_string(update);
+    return;
+  }
+  td_->messages_manager_->on_update_read_message_comments(DialogId(ChannelId(update->channel_id_)),
+                                                          MessageId(ServerMessageId(update->top_msg_id_)), MessageId(),
+                                                          last_read_inbox_message_id, MessageId());
   if ((update->flags_ & telegram_api::updateReadChannelDiscussionInbox::BROADCAST_ID_MASK) != 0) {
-    td_->messages_manager_->on_update_read_message_comments(
-        DialogId(ChannelId(update->broadcast_id_)), MessageId(ServerMessageId(update->broadcast_post_)), MessageId(),
-        MessageId(ServerMessageId(update->read_max_id_)), MessageId());
+    td_->messages_manager_->on_update_read_message_comments(DialogId(ChannelId(update->broadcast_id_)),
+                                                            MessageId(ServerMessageId(update->broadcast_post_)),
+                                                            MessageId(), last_read_inbox_message_id, MessageId());
   }
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateReadChannelDiscussionOutbox> update,
                                Promise<Unit> &&promise) {
-  td_->messages_manager_->on_update_read_message_comments(
-      DialogId(ChannelId(update->channel_id_)), MessageId(ServerMessageId(update->top_msg_id_)), MessageId(),
-      MessageId(), MessageId(ServerMessageId(update->read_max_id_)));
+  auto last_read_outbox_message_id = MessageId(ServerMessageId(update->read_max_id_));
+  if (!last_read_outbox_message_id.is_valid()) {
+    LOG(ERROR) << "Receive " << to_string(update);
+    return;
+  }
+  td_->messages_manager_->on_update_read_message_comments(DialogId(ChannelId(update->channel_id_)),
+                                                          MessageId(ServerMessageId(update->top_msg_id_)), MessageId(),
+                                                          MessageId(), last_read_outbox_message_id);
   promise.set_value(Unit());
 }
 
@@ -2909,6 +3037,9 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateNotifySettings>
     case telegram_api::notifyBroadcasts::ID:
       td_->notification_settings_manager_->on_update_scope_notify_settings(NotificationSettingsScope::Channel,
                                                                            std::move(update->notify_settings_));
+      break;
+    case telegram_api::notifyForumTopic::ID:
+      // TODO
       break;
     default:
       UNREACHABLE();
@@ -3176,7 +3307,8 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateUserStatus> upd
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateUserName> update, Promise<Unit> &&promise) {
   td_->contacts_manager_->on_update_user_name(UserId(update->user_id_), std::move(update->first_name_),
-                                              std::move(update->last_name_), std::move(update->username_));
+                                              std::move(update->last_name_),
+                                              Usernames{string(), std::move(update->usernames_)});
   promise.set_value(Unit());
 }
 
@@ -3265,7 +3397,12 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChatDefaultBann
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateDraftMessage> update, Promise<Unit> &&promise) {
-  td_->messages_manager_->on_update_dialog_draft_message(DialogId(update->peer_), std::move(update->draft_));
+  MessageId top_thread_message_id;
+  if ((update->flags_ & telegram_api::updateDraftMessage::TOP_MSG_ID_MASK) != 0) {
+    top_thread_message_id = MessageId(ServerMessageId(update->top_msg_id_));
+  }
+  td_->messages_manager_->on_update_dialog_draft_message(DialogId(update->peer_), top_thread_message_id,
+                                                         std::move(update->draft_));
   promise.set_value(Unit());
 }
 
@@ -3602,11 +3739,26 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateSavedRingtones>
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateTranscribedAudio> update, Promise<Unit> &&promise) {
-  td_->voice_notes_manager_->on_update_transcribed_audio(std::move(update->text_), update->transcription_id_,
-                                                         !update->pending_);
+  auto it = pending_audio_transcriptions_.find(update->transcription_id_);
+  if (it == pending_audio_transcriptions_.end()) {
+    return promise.set_value(Unit());
+  }
+  // flags_, dialog_id_ and message_id_ must not be used
+  if (!update->pending_) {
+    auto on_update = std::move(it->second);
+    pending_audio_transcriptions_.erase(it);
+    pending_audio_transcription_timeout_.cancel_timeout(update->transcription_id_);
+    on_update(std::move(update));
+  } else {
+    it->second(std::move(update));
+  }
   promise.set_value(Unit());
 }
 
 // unsupported updates
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannelPinnedTopic> update, Promise<Unit> &&promise) {
+  promise.set_value(Unit());
+}
 
 }  // namespace td

@@ -116,6 +116,9 @@ OptionManager::OptionManager(Td *td)
         G()->is_test_dc() ? static_cast<int64>(2964141614563343) : static_cast<int64>(773947703670341676);
     set_option_integer("themed_emoji_statuses_sticker_set_id", sticker_set_id);
   }
+  if (!have_option("forum_member_count_min")) {
+    set_option_integer("forum_member_count_min", 200);
+  }
 }
 
 OptionManager::~OptionManager() = default;
@@ -510,7 +513,7 @@ td_api::object_ptr<td_api::OptionValue> OptionManager::get_option_synchronously(
       break;
     case 'v':
       if (name == "version") {
-        return td_api::make_object<td_api::optionValueString>("1.8.7");
+        return td_api::make_object<td_api::optionValueString>("1.8.8");
       }
       break;
   }
